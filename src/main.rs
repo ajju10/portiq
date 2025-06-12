@@ -1,14 +1,15 @@
 use std::convert::Infallible;
+use std::env;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use std::env;
 
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty};
-use hyper::StatusCode;
+use hyper::client::conn::http1 as http1_client;
 use hyper::header::HeaderValue;
 use hyper::server::conn::http1 as http1_server;
 use hyper::{Request, Response, body::Bytes, service::service_fn};
+use hyper::{StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
@@ -20,7 +21,10 @@ mod config;
 #[tokio::main]
 async fn main() {
     let args = env::args().collect::<Vec<_>>();
-    assert!(args.len() > 1, "Config file is required\nUsage: cargo run -- <config-file-path>");
+    assert!(
+        args.len() > 1,
+        "Config file is required\nUsage: cargo run -- <config-file-path>"
+    );
 
     let gateway_config = Arc::new(config::load_config(&args[1]));
 
@@ -56,89 +60,98 @@ async fn handle_client(
     gateway_config: Arc<GatewayConfig>,
     client_ip: IpAddr,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
-    if let Some(upstream_url) = gateway_config.get_upstream_url(request.uri().path()) {
-        let original_request = request;
+    let original_request = request;
+    let original_path = original_request.uri().path();
+    let original_method = original_request.method();
 
-        let proxy_url = format!("{}{}", upstream_url, original_request.uri().path())
-            .parse::<hyper::Uri>()
-            .unwrap();
-        let proxy_host = proxy_url.host().expect("uri has no host");
-        let proxy_port = proxy_url.port_u16().unwrap();
-        let proxy_addr = format!("{}:{}", proxy_host, proxy_port);
-        let stream = TcpStream::connect(proxy_addr).await.unwrap();
-        let aio = TokioIo::new(stream);
+    match gateway_config.match_upstream_path(original_path, original_method.as_str()) {
+        Ok(upstream_url) => {
+            let proxy_uri_str = format!("{}{}", upstream_url, original_request.uri().path());
+            let proxy_uri: Uri = match proxy_uri_str.parse() {
+                Ok(uri) => uri,
+                Err(_) => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
+            };
 
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(aio).await.unwrap();
-        tokio::task::spawn(async move {
-            if let Err(err) = conn.await {
-                println!("Connection failed: {:?}", err);
-            }
-        });
+            let proxy_host = match proxy_uri.host() {
+                Some(host) => host,
+                None => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
+            };
 
-        let mut request_builder = Request::builder()
-            .version(original_request.version())
-            .uri(proxy_url.path())
-            .method(original_request.method());
+            let proxy_port = match proxy_uri.port_u16() {
+                Some(port) => port,
+                None => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
+            };
 
-        for (key, value) in original_request.headers() {
-            request_builder = request_builder.header(key, value);
-        }
+            let proxy_addr = format!("{}:{}", proxy_host, proxy_port);
+            let stream = match TcpStream::connect(proxy_addr).await {
+                Ok(s) => s,
+                Err(_) => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
+            };
 
-        // Set proxy headers
-        request_builder = request_builder.header(
-            "X-Forwarded-For",
-            HeaderValue::from_str(&client_ip.to_string()).unwrap(),
-        );
+            let aio = TokioIo::new(stream);
+            let (mut sender, conn) = match http1_client::handshake(aio).await {
+                Ok(result) => result,
+                Err(_) => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
+            };
 
-        let proxy_req = request_builder.body(original_request.into_body()).unwrap();
-
-        match sender.send_request(proxy_req).await {
-            Ok(proxy_res) => {
-                println!(
-                    "Response code from backend service: {:?}",
-                    proxy_res.status()
-                );
-                println!(
-                    "Response headers from backend service: {:#?}",
-                    proxy_res.headers()
-                );
-
-                let mut response_builder = Response::builder().status(proxy_res.status());
-
-                for (key, value) in proxy_res.headers() {
-                    if key == "content-length" || key == "server" {
-                        continue;
-                    }
-                    response_builder = response_builder.header(key, value);
+            tokio::task::spawn(async move {
+                if let Err(err) = conn.await {
+                    println!("Connection failed: {:?}", err);
                 }
+            });
 
-                // Add server header
-                response_builder = response_builder.header("Server", "gateway-rs");
+            let mut request_builder = Request::builder()
+                .version(original_request.version())
+                .uri(proxy_uri.path())
+                .method(original_request.method());
 
-                let response_bytes = proxy_res.map(|b| b.boxed());
-                let res = response_builder.body(response_bytes.into_body()).unwrap();
-                Ok(res)
+            for (key, value) in original_request.headers() {
+                request_builder = request_builder.header(key, value);
             }
-            Err(_) => Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(
-                    Empty::<Bytes>::new()
-                        .map_err(|never| match never {})
-                        .boxed(),
-                )
-                .unwrap()),
+
+            // Set X-Forwarded-For header
+            if let Ok(ip) = HeaderValue::from_str(&client_ip.to_string()) {
+                request_builder = request_builder.header("X-Forwarded-For", ip);
+            }
+
+            let proxy_req = match request_builder.body(original_request.into_body()) {
+                Ok(req) => req,
+                Err(_) => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
+            };
+
+            match sender.send_request(proxy_req).await {
+                Ok(proxy_res) => {
+                    let mut response_builder = Response::builder().status(proxy_res.status());
+                    for (key, value) in proxy_res.headers() {
+                        if key != "content-length" || key != "server" {
+                            response_builder = response_builder.header(key, value);
+                        }
+                    }
+                    // Add server header
+                    response_builder = response_builder.header("Server", "gateway-rs");
+
+                    let response_body = proxy_res.map(|b| b.boxed());
+                    let res = response_builder.body(response_body.into_body())?;
+                    Ok(res)
+                }
+                Err(_) => Ok(response_with_status(StatusCode::BAD_GATEWAY)),
+            }
         }
-    } else {
-        println!("No mapping found for path {}", request.uri());
-        let response = Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header("X-Proxy-Name", "gateway-rs")
-            .body(
-                Empty::<Bytes>::new()
-                    .map_err(|never| match never {})
-                    .boxed(),
-            )
-            .unwrap();
-        Ok(response)
+        Err(status_code) => {
+            println!("{}", status_code);
+            Ok(response_with_status(status_code))
+        }
     }
+}
+
+fn response_with_status(status_code: StatusCode) -> Response<BoxBody<Bytes, hyper::Error>> {
+    Response::builder()
+        .status(status_code)
+        .header("X-Proxy-Name", "gateway-rs")
+        .body(
+            Empty::<Bytes>::new()
+                .map_err(|never| match never {})
+                .boxed(),
+        )
+        .unwrap()
 }

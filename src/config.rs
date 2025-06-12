@@ -1,6 +1,6 @@
-use std::{fs::File, io::Read};
-
+use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::{fs::File, io::Read};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ServerConfig {
@@ -22,11 +22,22 @@ pub(crate) struct GatewayConfig {
 }
 
 impl GatewayConfig {
-    pub fn get_upstream_url(&self, path: &str) -> Option<String> {
-        if let Some(route) = self.routes.iter().find(|&route| route.path == path) {
-            Some(String::from(&route.upstream_url))
-        } else {
-            None
+    pub fn match_upstream_path(&self, path: &str, method: &str) -> Result<String, StatusCode> {
+        println!("Matching path: {path} and method: {method}");
+        match self.routes.iter().find(|route| route.path == path) {
+            None => Err(StatusCode::NOT_FOUND),
+            Some(route) => {
+                if route.methods.is_empty() {
+                    return Ok(route.upstream_url.clone());
+                }
+
+                let method_allowed = route.methods.iter().any(|m| m.eq_ignore_ascii_case(method));
+                if method_allowed {
+                    Ok(route.upstream_url.clone())
+                } else {
+                    Err(StatusCode::METHOD_NOT_ALLOWED)
+                }
+            }
         }
     }
 }
