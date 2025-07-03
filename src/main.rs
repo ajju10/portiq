@@ -128,10 +128,10 @@ async fn handle_client(
                         }
                     }
                     // Add server header
-                    response_builder = response_builder.header("Server", "gateway-rs");
+                    response_builder = response_builder.header("Server", "portiq");
 
                     let response_body = proxy_res.map(|b| b.boxed());
-                    let res = response_builder.body(response_body.into_body())?;
+                    let res = response_builder.body(response_body.into_body()).unwrap();
                     Ok(res)
                 }
                 Err(_) => Ok(response_with_status(StatusCode::BAD_GATEWAY)),
@@ -147,7 +147,7 @@ async fn handle_client(
 fn response_with_status(status_code: StatusCode) -> Response<BoxBody<Bytes, hyper::Error>> {
     Response::builder()
         .status(status_code)
-        .header("X-Proxy-Name", "gateway-rs")
+        .header("X-Proxy-Name", "portiq")
         .body(
             Empty::<Bytes>::new()
                 .map_err(|never| match never {})
