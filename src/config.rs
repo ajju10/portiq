@@ -2,38 +2,62 @@ use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::Read};
 
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub enum LogFormat {
+    #[serde(rename = "common")]
+    Common,
+    #[serde(rename = "json")]
+    Json,
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ServerConfig {
     pub host: String,
-    pub port: i32,
+    pub port: u16,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct GatewayLog {
+    pub level: String,
+    pub format: LogFormat,
+    pub file_path: String,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AccessLog {
+    pub enabled: bool,
+    pub format: LogFormat,
+    pub file_path: String,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
-    pub upstream_url: String,
+    pub upstream: String,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct GatewayConfig {
     pub server: ServerConfig,
+    pub log: GatewayLog,
+    pub access_log: AccessLog,
     pub routes: Vec<RouteConfig>,
 }
 
 impl GatewayConfig {
     pub fn match_upstream_path(&self, path: &str, method: &str) -> Result<String, StatusCode> {
-        println!("Matching path: {path} and method: {method}");
+        tracing::info!("Matching path: {path} and method: {method}");
         match self.routes.iter().find(|route| route.path == path) {
             None => Err(StatusCode::NOT_FOUND),
             Some(route) => {
                 if route.methods.is_empty() {
-                    return Ok(route.upstream_url.clone());
+                    return Ok(route.upstream.clone());
                 }
 
                 let method_allowed = route.methods.iter().any(|m| m.eq_ignore_ascii_case(method));
                 if method_allowed {
-                    Ok(route.upstream_url.clone())
+                    Ok(route.upstream.clone())
                 } else {
                     Err(StatusCode::METHOD_NOT_ALLOWED)
                 }
