@@ -3,6 +3,7 @@ use std::env;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
+use crate::config::GatewayConfig;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty};
 use hyper::client::conn::http1 as http1_client;
@@ -14,29 +15,30 @@ use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::config::GatewayConfig;
-
 mod config;
+
+mod logger;
 
 #[tokio::main]
 async fn main() {
     let args = env::args().collect::<Vec<_>>();
     assert!(
         args.len() > 1,
-        "Config file is required\nUsage: cargo run -- <config-file-path>"
+        "Config file is required\nUsage: cargo run <config-file-path>"
     );
 
     let gateway_config = Arc::new(config::load_config(&args[1]));
 
-    let server_addr =
-        SocketAddr::from((Ipv4Addr::new(0, 0, 0, 0), gateway_config.server.port as u16));
+    logger::init_logger(&gateway_config.log, &gateway_config.access_log);
+
+    let server_addr = SocketAddr::from((Ipv4Addr::new(0, 0, 0, 0), gateway_config.server.port));
     let listener = TcpListener::bind(server_addr).await.unwrap();
 
-    println!("Started server at {:?}", server_addr);
+    tracing::info!("Started server at {:?}", server_addr);
 
     loop {
         let (stream, addr) = listener.accept().await.unwrap();
-        println!("Connected with client: {}", addr);
+        tracing::info!("Connected with client: {}", addr);
 
         let aio = TokioIo::new(stream);
 
@@ -49,7 +51,7 @@ async fn main() {
                 )
                 .await
             {
-                eprintln!("Error serving connection: {:?}", err);
+                tracing::error!("Error serving connection: {:?}", err);
             }
         });
     }
@@ -82,7 +84,7 @@ async fn handle_client(
                 None => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
             };
 
-            let proxy_addr = format!("{}:{}", proxy_host, proxy_port);
+            let proxy_addr = format!("{proxy_host}:{proxy_port}");
             let stream = match TcpStream::connect(proxy_addr).await {
                 Ok(s) => s,
                 Err(_) => return Ok(response_with_status(StatusCode::BAD_GATEWAY)),
@@ -96,7 +98,7 @@ async fn handle_client(
 
             tokio::task::spawn(async move {
                 if let Err(err) = conn.await {
-                    println!("Connection failed: {:?}", err);
+                    tracing::warn!("Connection failed: {:?}", err);
                 }
             });
 
@@ -138,7 +140,7 @@ async fn handle_client(
             }
         }
         Err(status_code) => {
-            println!("{}", status_code);
+            tracing::warn!("{}", status_code);
             Ok(response_with_status(status_code))
         }
     }
