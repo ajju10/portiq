@@ -1,23 +1,29 @@
+use crate::config::GatewayConfig;
+use crate::middleware::{AccessLogger, RequestID};
+use crate::service::HandlerService;
+
+use http_body_util::{BodyExt, Empty, combinators::BoxBody};
+use hyper::client::conn::http1 as http1_client;
+use hyper::server::conn::http1 as http1_server;
+use hyper::{
+    Request, Response, StatusCode, Uri, body::Bytes, body::Incoming, header::HeaderValue,
+    service::service_fn,
+};
+use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::env;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-
-use crate::config::GatewayConfig;
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Empty};
-use hyper::client::conn::http1 as http1_client;
-use hyper::header::HeaderValue;
-use hyper::server::conn::http1 as http1_server;
-use hyper::{Request, Response, body::Bytes, service::service_fn};
-use hyper::{StatusCode, Uri};
-use hyper_util::rt::TokioIo;
-use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
+use tower::ServiceBuilder;
 
 mod config;
 
 mod logger;
+
+mod middleware;
+
+mod service;
 
 #[tokio::main]
 async fn main() {
@@ -44,11 +50,16 @@ async fn main() {
 
         let gateway_config = gateway_config.clone();
         tokio::spawn(async move {
+            let client_handler_service =
+                service_fn(move |req| handle_client(req, gateway_config.clone(), addr.ip()));
+            let base_service = ServiceBuilder::new()
+                .layer_fn(RequestID::new)
+                .layer_fn(AccessLogger::new)
+                .service(client_handler_service);
+            let handler_service = HandlerService::new(base_service, addr.ip());
+
             if let Err(err) = http1_server::Builder::new()
-                .serve_connection(
-                    aio,
-                    service_fn(move |req| handle_client(req, gateway_config.clone(), addr.ip())),
-                )
+                .serve_connection(aio, handler_service)
                 .await
             {
                 tracing::error!("Error serving connection: {:?}", err);
@@ -58,7 +69,7 @@ async fn main() {
 }
 
 async fn handle_client(
-    request: Request<hyper::body::Incoming>,
+    request: Request<Incoming>,
     gateway_config: Arc<GatewayConfig>,
     client_ip: IpAddr,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
@@ -139,10 +150,7 @@ async fn handle_client(
                 Err(_) => Ok(response_with_status(StatusCode::BAD_GATEWAY)),
             }
         }
-        Err(status_code) => {
-            tracing::warn!("{}", status_code);
-            Ok(response_with_status(status_code))
-        }
+        Err(status_code) => Ok(response_with_status(status_code)),
     }
 }
 
