@@ -47,16 +47,15 @@ pub(crate) struct GatewayConfig {
 
 impl GatewayConfig {
     pub fn match_upstream_path(&self, path: &str, method: &str) -> Result<String, StatusCode> {
-        tracing::info!("Matching path: {path} and method: {method}");
         match self.routes.iter().find(|route| route.path == path) {
-            None => Err(StatusCode::NOT_FOUND),
+            None => {
+                tracing::warn!("No matching route found for path {path}");
+                Err(StatusCode::NOT_FOUND)
+            }
             Some(route) => {
-                if route.methods.is_empty() {
-                    return Ok(route.upstream.clone());
-                }
-
-                let method_allowed = route.methods.iter().any(|m| m.eq_ignore_ascii_case(method));
-                if method_allowed {
+                if route.methods.is_empty()
+                    || route.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
+                {
                     Ok(route.upstream.clone())
                 } else {
                     Err(StatusCode::METHOD_NOT_ALLOWED)

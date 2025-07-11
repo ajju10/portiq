@@ -28,7 +28,7 @@ pub(crate) fn init_logger(gateway_log_config: &GatewayLog, access_log_config: &A
         };
         let access_log_layer = build_layer(access_log_stream, &access_log_config.format)
             .with_filter(filter_fn(|metadata| {
-                metadata.target() == "access" && metadata.level() == &tracing::Level::INFO
+                metadata.target() == "access" && metadata.level() <= &tracing::Level::INFO
             }))
             .boxed();
         layers.push(access_log_layer);

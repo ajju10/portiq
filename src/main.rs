@@ -150,10 +150,7 @@ async fn handle_client(
                 Err(_) => Ok(response_with_status(StatusCode::BAD_GATEWAY)),
             }
         }
-        Err(status_code) => {
-            tracing::warn!("{}", status_code);
-            Ok(response_with_status(status_code))
-        }
+        Err(status_code) => Ok(response_with_status(status_code)),
     }
 }
 

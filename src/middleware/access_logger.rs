@@ -1,5 +1,8 @@
 use crate::middleware::REQUEST_ID_HEADER;
-use hyper::{Request, body::Incoming, header::USER_AGENT, service::Service};
+use http_body_util::combinators::BoxBody;
+use hyper::body::Bytes;
+use hyper::{Error, Request, Response, body::Incoming, header::USER_AGENT, service::Service};
+use std::convert::Infallible;
 use std::{net::IpAddr, pin::Pin, str::FromStr, time::Instant};
 
 #[derive(Clone)]
@@ -15,7 +18,10 @@ impl<S> AccessLogger<S> {
 
 impl<S> Service<Request<Incoming>> for AccessLogger<S>
 where
-    S: Service<Request<Incoming>> + Clone + Send + 'static,
+    S: Service<Request<Incoming>, Response = Response<BoxBody<Bytes, Error>>, Error = Infallible>
+        + Clone
+        + Send
+        + 'static,
     <S as Service<Request<Incoming>>>::Future: Send,
 {
     type Response = S::Response;
@@ -46,27 +52,35 @@ where
 
         let inner = self.inner.clone();
         Box::pin(async move {
-            let result = inner.call(req).await;
+            let result = inner.call(req).await.unwrap();
+
             let duration = start.elapsed().as_millis();
-            tracing::info!(
-                target: "access",
-                method = %method,
-                path = %path,
-                duration_ms = %duration,
-                client_ip = %client_ip,
-                user_agent = %user_agent,
-                request_id = %request_id,
-            );
-            match result {
-                Ok(res) => {
-                    tracing::info!("Calling after response processing");
-                    Ok(res)
-                }
-                Err(e) => {
-                    tracing::error!("Encountered error while processing");
-                    Err(e)
-                }
+            let status_code = result.status().as_u16();
+            if result.status().is_success() {
+                tracing::info!(
+                    target: "access",
+                    status = %status_code,
+                    method = %method,
+                    path = %path,
+                    duration_ms = %duration,
+                    client_ip = %client_ip,
+                    user_agent = %user_agent,
+                    request_id = %request_id,
+                );
+            } else {
+                tracing::error!(
+                    target: "access",
+                    status = %status_code,
+                    method = %method,
+                    path = %path,
+                    duration_ms = %duration,
+                    client_ip = %client_ip,
+                    user_agent = %user_agent,
+                    request_id = %request_id,
+                );
             }
+
+            Ok(result)
         })
     }
 }
