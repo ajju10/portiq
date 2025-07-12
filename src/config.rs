@@ -2,7 +2,7 @@ use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::Read};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum LogFormat {
     #[serde(rename = "common")]
     Common,
@@ -10,20 +10,31 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Protocol {
+    #[serde(rename = "http")]
+    Http,
+    #[serde(rename = "https")]
+    Https,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ServerConfig {
     pub host: String,
     pub port: u16,
+    pub protocol: Protocol,
+    pub cert_file: Option<String>,
+    pub key_file: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct GatewayLog {
     pub level: String,
     pub format: LogFormat,
     pub file_path: String,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct AccessLog {
     pub enabled: bool,
     pub format: LogFormat,
@@ -37,7 +48,7 @@ pub(crate) struct RouteConfig {
     pub upstream: String,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct GatewayConfig {
     pub server: ServerConfig,
     pub log: GatewayLog,
