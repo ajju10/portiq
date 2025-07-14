@@ -1,6 +1,6 @@
 use crate::config::{GatewayConfig, Protocol};
-use crate::middleware::{AccessLogger, RequestID};
-use crate::service::HandlerService;
+use crate::middleware::registry::MiddlewareRegistry;
+use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
 
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::client::conn::http1 as http1_client;
@@ -15,11 +15,10 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{env, fs, io};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
-use tower::ServiceBuilder;
 
 mod config;
 
@@ -27,7 +26,32 @@ mod logger;
 
 mod middleware;
 
-mod service;
+mod system {
+    use crate::config::GatewayConfig;
+    use crate::middleware::registry::MiddlewareRegistry;
+    use std::net::IpAddr;
+    use std::sync::{Arc, Mutex};
+
+    pub(crate) struct Context {
+        pub(crate) gateway_config: Arc<GatewayConfig>,
+        pub(crate) middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+        pub(crate) ip_addr: IpAddr,
+    }
+
+    impl Context {
+        pub(crate) fn new(
+            gateway_config: Arc<GatewayConfig>,
+            middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+            ip_addr: IpAddr,
+        ) -> Self {
+            Context {
+                gateway_config,
+                middleware_registry,
+                ip_addr,
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -39,7 +63,16 @@ async fn main() {
 
     let gateway_config = Arc::new(config::load_config(&args[1]));
 
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     logger::init_logger(&gateway_config.log, &gateway_config.access_log);
+
+    let middleware_registry = Arc::new(Mutex::new(MiddlewareRegistry::new()));
+    {
+        let mut locked_registry = middleware_registry.lock().unwrap();
+        locked_registry.register("request_id", RequestID);
+        locked_registry.register("access_logger", AccessLogger);
+    }
 
     let ip_addr = IpAddr::from_str(&gateway_config.server.host).expect("Host must be valid");
     let server_addr = SocketAddr::from((ip_addr, gateway_config.server.port));
@@ -52,22 +85,7 @@ async fn main() {
         }
         Protocol::Https => {
             tracing::info!("Starting server at https://{:?}", server_addr);
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-
-            let cert_file = gateway_config.server.cert_file.as_ref().unwrap_or_else(|| {
-                tracing::error!("Certificate file is required for https");
-                panic!("Certificate file is not provided for https protocol");
-            });
-
-            let key_file = gateway_config.server.key_file.as_ref().unwrap_or_else(|| {
-                tracing::error!("Key file is required for https");
-                panic!("Key file is not provided for https protocol");
-            });
-
-            let certs = load_certs(cert_file).expect("Failed to load certificate");
-            let key = load_private_key(key_file).expect("Failed to load private key");
-
-            start_https_server(listener, gateway_config, certs, key).await;
+            start_https_server(listener, gateway_config, middleware_registry).await;
         }
     }
 }
@@ -83,14 +101,8 @@ async fn start_http_server(listener: TcpListener, gateway_config: Arc<GatewayCon
         tokio::spawn(async move {
             let client_handler_service =
                 service_fn(move |req| handle_client(req, gateway_config.clone(), addr.ip()));
-            let base_service = ServiceBuilder::new()
-                .layer_fn(RequestID::new)
-                .layer_fn(AccessLogger::new)
-                .service(client_handler_service);
-            let handler_service = HandlerService::new(base_service, addr.ip());
-
             if let Err(err) = http1_server::Builder::new()
-                .serve_connection(aio, handler_service)
+                .serve_connection(aio, client_handler_service)
                 .await
             {
                 tracing::error!("Error serving connection: {:?}", err);
@@ -102,9 +114,21 @@ async fn start_http_server(listener: TcpListener, gateway_config: Arc<GatewayCon
 async fn start_https_server(
     listener: TcpListener,
     gateway_config: Arc<GatewayConfig>,
-    certs: Vec<CertificateDer<'static>>,
-    key: PrivateKeyDer<'static>,
+    middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
 ) {
+    let cert_file = gateway_config.server.cert_file.as_ref().unwrap_or_else(|| {
+        tracing::error!("Certificate file is required for https");
+        panic!("Certificate file is not provided for https protocol");
+    });
+
+    let key_file = gateway_config.server.key_file.as_ref().unwrap_or_else(|| {
+        tracing::error!("Key file is required for https");
+        panic!("Key file is not provided for https protocol");
+    });
+
+    let certs = load_certs(cert_file).expect("Failed to load certificate");
+    let key = load_private_key(key_file).expect("Failed to load private key");
+
     let mut server_config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
@@ -117,13 +141,15 @@ async fn start_https_server(
         let tls_acceptor = tls_acceptor.clone();
 
         let gateway_config = gateway_config.clone();
-        let client_handler_service =
-            service_fn(move |req| handle_client(req, gateway_config.clone(), addr.ip()));
-        let base_service = ServiceBuilder::new()
-            .layer_fn(RequestID::new)
-            .layer_fn(AccessLogger::new)
-            .service(client_handler_service);
-        let handler_service = HandlerService::new(base_service, addr.ip());
+        let middleware_registry = middleware_registry.clone();
+        let client_handler_service = service_fn(move |req| {
+            let context = system::Context::new(
+                gateway_config.clone(),
+                middleware_registry.clone(),
+                addr.ip(),
+            );
+            handle_client1(req, context)
+        });
 
         tokio::spawn(async move {
             let tls_stream = match tls_acceptor.accept(stream).await {
@@ -136,7 +162,7 @@ async fn start_https_server(
             tracing::info!("Connected with client: {} over TLS", addr);
 
             if let Err(err) = auto::Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(tls_stream), handler_service)
+                .serve_connection(TokioIo::new(tls_stream), client_handler_service)
                 .await
             {
                 tracing::error!("Error serving connection: {err:#}");
@@ -290,4 +316,29 @@ fn load_private_key(filename: &str) -> io::Result<PrivateKeyDer<'static>> {
 
 fn error(err: String) -> io::Error {
     io::Error::other(err)
+}
+
+fn final_handler() -> HandlerFunc {
+    Arc::new(|req: Request<RequestBody>| {
+        let body = Full::new(Bytes::from("Handled".to_string()));
+        let response = Response::new(BoxBody::new(body).map_err(|never| match never {}).boxed());
+        Box::pin(async move { Ok(response) })
+    })
+}
+
+async fn handle_client1(
+    request: Request<Incoming>,
+    context: system::Context,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
+    let original_request = request;
+    let middlewares = {
+        let locked_registry = context.middleware_registry.lock().unwrap();
+        let global_middlewares = ["request_id".to_string(), "access_logger".to_string()];
+        locked_registry.create_chain(&global_middlewares)
+    };
+    let handler = final_handler().clone();
+    let next = Next::new(handler, &middlewares);
+    let (parts, body) = original_request.into_parts();
+    let request = Request::from_parts(parts, RequestBody::new(body));
+    next.run(request).await
 }

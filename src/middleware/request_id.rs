@@ -1,33 +1,33 @@
-use crate::middleware::REQUEST_ID_HEADER;
-use hyper::{Request, body::Incoming, http::HeaderValue, service::Service};
+use crate::middleware::Result;
+use crate::middleware::registry::MiddlewareFactory;
+use crate::middleware::{Middleware, Next, REQUEST_ID_HEADER, RequestBody, ResponseBody};
+use async_trait::async_trait;
+use hyper::http::HeaderValue;
+use hyper::{Request, Response};
+use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(Clone)]
-pub struct RequestID<S> {
-    inner: S,
-}
+pub struct RequestID;
 
-impl<S> RequestID<S> {
-    pub fn new(inner: S) -> Self {
-        RequestID { inner }
-    }
-}
-
-impl<S> Service<Request<Incoming>> for RequestID<S>
-where
-    S: Service<Request<Incoming>>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn call(&self, req: Request<Incoming>) -> Self::Future {
+#[async_trait]
+impl Middleware for RequestID {
+    async fn call(
+        &self,
+        req: Request<RequestBody>,
+        next: Next<'_>,
+    ) -> Result<Response<ResponseBody>> {
         let request_id = Uuid::new_v4();
         let mut req = req;
         req.headers_mut().insert(
             REQUEST_ID_HEADER,
             HeaderValue::from_str(&request_id.to_string()).unwrap(),
         );
-        self.inner.call(req)
+        next.run(req).await
+    }
+}
+
+impl MiddlewareFactory for RequestID {
+    fn create(&self) -> Arc<dyn Middleware> {
+        Arc::new(RequestID)
     }
 }
