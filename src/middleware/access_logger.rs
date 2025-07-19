@@ -1,34 +1,23 @@
-use crate::middleware::REQUEST_ID_HEADER;
-use http_body_util::combinators::BoxBody;
-use hyper::body::Bytes;
-use hyper::{Error, Request, Response, body::Incoming, header::USER_AGENT, service::Service};
-use std::convert::Infallible;
-use std::{net::IpAddr, pin::Pin, str::FromStr, time::Instant};
+use crate::middleware::Result;
+use crate::middleware::registry::MiddlewareFactory;
+use crate::middleware::{Middleware, Next, REQUEST_ID_HEADER, RequestBody, ResponseBody};
+use async_trait::async_trait;
+use hyper::header::USER_AGENT;
+use hyper::{Request, Response};
+use std::net::IpAddr;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Instant;
 
-#[derive(Clone)]
-pub struct AccessLogger<S> {
-    inner: S,
-}
+pub struct AccessLogger;
 
-impl<S> AccessLogger<S> {
-    pub fn new(inner: S) -> Self {
-        AccessLogger { inner }
-    }
-}
-
-impl<S> Service<Request<Incoming>> for AccessLogger<S>
-where
-    S: Service<Request<Incoming>, Response = Response<BoxBody<Bytes, Error>>, Error = Infallible>
-        + Clone
-        + Send
-        + 'static,
-    <S as Service<Request<Incoming>>>::Future: Send,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn call(&self, req: Request<Incoming>) -> Self::Future {
+#[async_trait]
+impl Middleware for AccessLogger {
+    async fn call(
+        &self,
+        req: Request<RequestBody>,
+        next: Next<'_>,
+    ) -> Result<Response<ResponseBody>> {
         let start = Instant::now();
         let method = req.method().clone();
         let path = req.uri().path().to_string();
@@ -50,37 +39,38 @@ where
             .unwrap_or("-")
             .to_string();
 
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            let result = inner.call(req).await.unwrap();
+        let response = next.run(req).await.unwrap();
+        let duration = start.elapsed().as_millis();
+        let status_code = response.status().as_u16();
+        if response.status().is_success() {
+            tracing::info!(
+                target: "access",
+                status = %status_code,
+                method = %method,
+                path = %path,
+                duration_ms = %duration,
+                client_ip = %client_ip,
+                user_agent = %user_agent,
+                request_id = %request_id,
+            );
+        } else {
+            tracing::error!(
+                target: "access",
+                status = %status_code,
+                method = %method,
+                path = %path,
+                duration_ms = %duration,
+                client_ip = %client_ip,
+                user_agent = %user_agent,
+                request_id = %request_id,
+            );
+        }
+        Ok(response)
+    }
+}
 
-            let duration = start.elapsed().as_millis();
-            let status_code = result.status().as_u16();
-            if result.status().is_success() {
-                tracing::info!(
-                    target: "access",
-                    status = %status_code,
-                    method = %method,
-                    path = %path,
-                    duration_ms = %duration,
-                    client_ip = %client_ip,
-                    user_agent = %user_agent,
-                    request_id = %request_id,
-                );
-            } else {
-                tracing::error!(
-                    target: "access",
-                    status = %status_code,
-                    method = %method,
-                    path = %path,
-                    duration_ms = %duration,
-                    client_ip = %client_ip,
-                    user_agent = %user_agent,
-                    request_id = %request_id,
-                );
-            }
-
-            Ok(result)
-        })
+impl MiddlewareFactory for AccessLogger {
+    fn create(&self) -> Arc<dyn Middleware> {
+        Arc::new(AccessLogger)
     }
 }
