@@ -1,13 +1,9 @@
 use crate::config::{GatewayConfig, Protocol};
 use crate::middleware::registry::MiddlewareRegistry;
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
-
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
-use hyper::client::conn::http1 as http1_client;
-use hyper::server::conn::http1 as http1_server;
 use hyper::{
-    Request, Response, StatusCode, Uri, body::Bytes, body::Incoming, header::HeaderValue,
-    service::service_fn,
+    Method, Request, Response, StatusCode, body::Bytes, body::Incoming, service::service_fn,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
@@ -17,7 +13,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::{env, fs, io};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
 mod config;
@@ -81,7 +77,7 @@ async fn main() {
     match gateway_config.server.protocol {
         Protocol::Http => {
             tracing::info!("Starting server at http://{:?}", server_addr);
-            start_http_server(listener, gateway_config).await;
+            start_http_server(listener, gateway_config, middleware_registry).await;
         }
         Protocol::Https => {
             tracing::info!("Starting server at https://{:?}", server_addr);
@@ -90,19 +86,29 @@ async fn main() {
     }
 }
 
-async fn start_http_server(listener: TcpListener, gateway_config: Arc<GatewayConfig>) {
+async fn start_http_server(
+    listener: TcpListener,
+    gateway_config: Arc<GatewayConfig>,
+    middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+) {
     loop {
         let (stream, addr) = listener.accept().await.unwrap();
         tracing::info!("Connected with client: {}", addr);
 
-        let aio = TokioIo::new(stream);
-
         let gateway_config = gateway_config.clone();
+        let middleware_registry = middleware_registry.clone();
+        let client_handler_service = service_fn(move |req| {
+            let context = system::Context::new(
+                gateway_config.clone(),
+                middleware_registry.clone(),
+                addr.ip(),
+            );
+            handle_client(req, context)
+        });
+
         tokio::spawn(async move {
-            let client_handler_service =
-                service_fn(move |req| handle_client(req, gateway_config.clone(), addr.ip()));
-            if let Err(err) = http1_server::Builder::new()
-                .serve_connection(aio, client_handler_service)
+            if let Err(err) = auto::Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(stream), client_handler_service)
                 .await
             {
                 tracing::error!("Error serving connection: {:?}", err);
@@ -148,7 +154,7 @@ async fn start_https_server(
                 middleware_registry.clone(),
                 addr.ip(),
             );
-            handle_client1(req, context)
+            handle_client(req, context)
         });
 
         tokio::spawn(async move {
@@ -168,93 +174,6 @@ async fn start_https_server(
                 tracing::error!("Error serving connection: {err:#}");
             }
         });
-    }
-}
-
-async fn handle_client(
-    request: Request<Incoming>,
-    gateway_config: Arc<GatewayConfig>,
-    client_ip: IpAddr,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
-    let original_request = request;
-    let original_path = original_request.uri().path();
-    let original_method = original_request.method();
-
-    match gateway_config.match_upstream_path(original_path, original_method.as_str()) {
-        Ok(upstream_url) => {
-            let proxy_uri_str = format!("{}{}", upstream_url, original_request.uri().path());
-            let proxy_uri: Uri = match proxy_uri_str.parse() {
-                Ok(uri) => uri,
-                Err(_) => return Ok(bad_gateway_response()),
-            };
-
-            let proxy_host = match proxy_uri.host() {
-                Some(host) => host,
-                None => return Ok(bad_gateway_response()),
-            };
-
-            let proxy_port = match proxy_uri.port_u16() {
-                Some(port) => port,
-                None => return Ok(bad_gateway_response()),
-            };
-
-            let proxy_addr = format!("{proxy_host}:{proxy_port}");
-            let stream = match TcpStream::connect(proxy_addr).await {
-                Ok(s) => s,
-                Err(_) => return Ok(bad_gateway_response()),
-            };
-
-            let aio = TokioIo::new(stream);
-            let (mut sender, conn) = match http1_client::handshake(aio).await {
-                Ok(result) => result,
-                Err(_) => return Ok(bad_gateway_response()),
-            };
-
-            tokio::task::spawn(async move {
-                if let Err(err) = conn.await {
-                    tracing::warn!("Connection failed: {:?}", err);
-                }
-            });
-
-            let mut request_builder = Request::builder()
-                .version(original_request.version())
-                .uri(proxy_uri.path())
-                .method(original_request.method());
-
-            for (key, value) in original_request.headers() {
-                request_builder = request_builder.header(key, value);
-            }
-
-            // Set X-Forwarded-For header
-            if let Ok(ip) = HeaderValue::from_str(&client_ip.to_string()) {
-                request_builder = request_builder.header("X-Forwarded-For", ip);
-            }
-
-            let proxy_req = match request_builder.body(original_request.into_body()) {
-                Ok(req) => req,
-                Err(_) => return Ok(bad_gateway_response()),
-            };
-
-            match sender.send_request(proxy_req).await {
-                Ok(proxy_res) => {
-                    let mut response_builder = Response::builder().status(proxy_res.status());
-                    for (key, value) in proxy_res.headers() {
-                        println!("{key}: {value:#?}");
-                        if key != "content-length" || key != "server" {
-                            response_builder = response_builder.header(key, value);
-                        }
-                    }
-                    // Add server header
-                    response_builder = response_builder.header("server", "portiq");
-
-                    let response_body = proxy_res.map(|b| b.boxed());
-                    let res = response_builder.body(response_body.into_body()).unwrap();
-                    Ok(res)
-                }
-                Err(_) => Ok(bad_gateway_response()),
-            }
-        }
-        Err(status_code) => Ok(response_with_status(status_code)),
     }
 }
 
@@ -318,25 +237,63 @@ fn error(err: String) -> io::Error {
     io::Error::other(err)
 }
 
-fn final_handler() -> HandlerFunc {
-    Arc::new(|req: Request<RequestBody>| {
-        let body = Full::new(Bytes::from("Handled".to_string()));
-        let response = Response::new(BoxBody::new(body).map_err(|never| match never {}).boxed());
-        Box::pin(async move { Ok(response) })
+fn send_upstream(upstream_url: String) -> HandlerFunc {
+    Arc::new(move |req: Request<RequestBody>| {
+        let url = upstream_url.clone();
+        let req_client = reqwest::Client::new();
+        Box::pin(async move {
+            match req.method() {
+                &Method::GET => {
+                    let mut request = req_client.get(url);
+                    for (key, value) in req.headers() {
+                        request = request.header(key, value);
+                    }
+                    match request.send().await {
+                        Ok(resp) => {
+                            let resp = resp.bytes().await.unwrap();
+                            let body = Full::from(resp);
+                            let response = Response::new(
+                                BoxBody::new(body).map_err(|never| match never {}).boxed(),
+                            );
+                            Ok(response)
+                        }
+                        Err(_) => Ok(bad_gateway_response()),
+                    }
+                }
+                _ => {
+                    println!("Unsupported method: {}", req.method().as_str());
+                    Ok(bad_gateway_response())
+                }
+            }
+        })
     })
 }
 
-async fn handle_client1(
+async fn handle_client(
     request: Request<Incoming>,
     context: system::Context,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
     let original_request = request;
+    let original_path = original_request.uri().path();
+    let original_method = original_request.method();
+
+    let route_match_result = context
+        .gateway_config
+        .match_upstream_path(original_path, original_method.as_str());
+    if let Err(status_code) = route_match_result {
+        return Ok(response_with_status(status_code));
+    }
+
+    let upstream_url = route_match_result.unwrap();
+    let proxy_uri_str = format!("{}{}", upstream_url, original_request.uri().path());
+
     let middlewares = {
         let locked_registry = context.middleware_registry.lock().unwrap();
         let global_middlewares = ["request_id".to_string(), "access_logger".to_string()];
         locked_registry.create_chain(&global_middlewares)
     };
-    let handler = final_handler().clone();
+
+    let handler = send_upstream(proxy_uri_str).clone();
     let next = Next::new(handler, &middlewares);
     let (parts, body) = original_request.into_parts();
     let request = Request::from_parts(parts, RequestBody::new(body));
