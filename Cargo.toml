@@ -8,7 +8,6 @@ http-body-util = "0.1.3"
 hyper = { version = "1.6.0", features = ["http1", "http2"] }
 hyper-util = { version = "0.1.14", features = ["server-auto", "tokio"] }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_yaml_ng = "0.10.0"
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["json", "env-filter"] }
@@ -19,3 +18,4 @@ rustls = "0.23.29"
 tokio-rustls = "0.26.2"
 async-trait = "0.1.88"
 reqwest = "0.12.22"
+config = { version = "0.15.13", default-features = false, features = ["yaml"] }

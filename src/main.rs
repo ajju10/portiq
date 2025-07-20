@@ -22,29 +22,22 @@ mod logger;
 
 mod middleware;
 
-mod system {
-    use crate::config::GatewayConfig;
-    use crate::middleware::registry::MiddlewareRegistry;
-    use std::net::IpAddr;
-    use std::sync::{Arc, Mutex};
+pub(crate) struct RouterContext {
+    pub(crate) gateway_config: Arc<GatewayConfig>,
+    pub(crate) middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+    pub(crate) ip_addr: IpAddr,
+}
 
-    pub(crate) struct Context {
-        pub(crate) gateway_config: Arc<GatewayConfig>,
-        pub(crate) middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
-        pub(crate) ip_addr: IpAddr,
-    }
-
-    impl Context {
-        pub(crate) fn new(
-            gateway_config: Arc<GatewayConfig>,
-            middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
-            ip_addr: IpAddr,
-        ) -> Self {
-            Context {
-                gateway_config,
-                middleware_registry,
-                ip_addr,
-            }
+impl RouterContext {
+    pub(crate) fn new(
+        gateway_config: Arc<GatewayConfig>,
+        middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+        ip_addr: IpAddr,
+    ) -> Self {
+        RouterContext {
+            gateway_config,
+            middleware_registry,
+            ip_addr,
         }
     }
 }
@@ -98,7 +91,7 @@ async fn start_http_server(
         let gateway_config = gateway_config.clone();
         let middleware_registry = middleware_registry.clone();
         let client_handler_service = service_fn(move |req| {
-            let context = system::Context::new(
+            let context = RouterContext::new(
                 gateway_config.clone(),
                 middleware_registry.clone(),
                 addr.ip(),
@@ -149,7 +142,7 @@ async fn start_https_server(
         let gateway_config = gateway_config.clone();
         let middleware_registry = middleware_registry.clone();
         let client_handler_service = service_fn(move |req| {
-            let context = system::Context::new(
+            let context = RouterContext::new(
                 gateway_config.clone(),
                 middleware_registry.clone(),
                 addr.ip(),
@@ -271,7 +264,7 @@ fn send_upstream(upstream_url: String) -> HandlerFunc {
 
 async fn handle_client(
     request: Request<Incoming>,
-    context: system::Context,
+    context: RouterContext,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
     let original_request = request;
     let original_path = original_request.uri().path();
