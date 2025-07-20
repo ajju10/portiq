@@ -3,10 +3,12 @@ use crate::middleware::registry::MiddlewareRegistry;
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::{
-    Method, Request, Response, StatusCode, body::Bytes, body::Incoming, service::service_fn,
+    HeaderMap, Method, Request, Response, StatusCode, body::Bytes, body::Incoming,
+    service::service_fn,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
+use reqwest::RequestBuilder;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
@@ -230,36 +232,72 @@ fn error(err: String) -> io::Error {
     io::Error::other(err)
 }
 
-fn send_upstream(upstream_url: String) -> HandlerFunc {
+fn send_upstream(upstream_url: String, client_ip: IpAddr) -> HandlerFunc {
     Arc::new(move |req: Request<RequestBody>| {
         let url = upstream_url.clone();
+        let client_ip = client_ip;
+        let host = if let Some(val) = req.headers().get("host") {
+            String::from(val.to_str().unwrap())
+        } else {
+            req.uri().authority().map(|a| a.to_string()).unwrap()
+        };
+        let proto = if req.uri().scheme_str() == Some("https") {
+            "https"
+        } else {
+            "http"
+        };
+
         let req_client = reqwest::Client::new();
+        let mut request_builder = req_client.request(req.method().clone(), url);
+        request_builder =
+            set_proxy_headers(client_ip, &host, proto, request_builder, req.headers());
+
         Box::pin(async move {
-            match req.method() {
-                &Method::GET => {
-                    let mut request = req_client.get(url);
-                    for (key, value) in req.headers() {
-                        request = request.header(key, value);
-                    }
-                    match request.send().await {
-                        Ok(resp) => {
-                            let resp = resp.bytes().await.unwrap();
-                            let body = Full::from(resp);
-                            let response = Response::new(
-                                BoxBody::new(body).map_err(|never| match never {}).boxed(),
-                            );
-                            Ok(response)
-                        }
-                        Err(_) => Ok(bad_gateway_response()),
-                    }
+            if matches!(req.method(), &Method::POST | &Method::PUT | &Method::PATCH) {
+                let body = req.into_body();
+                let collected = body.collect().await.unwrap();
+                request_builder = request_builder.body(collected.to_bytes());
+            }
+
+            match request_builder.send().await {
+                Ok(resp) => {
+                    let resp = resp.bytes().await.unwrap();
+                    let body = Full::from(resp);
+                    let response =
+                        Response::new(BoxBody::new(body).map_err(|never| match never {}).boxed());
+                    Ok(response)
                 }
-                _ => {
-                    println!("Unsupported method: {}", req.method().as_str());
-                    Ok(bad_gateway_response())
-                }
+                Err(_) => Ok(bad_gateway_response()),
             }
         })
     })
+}
+
+fn set_proxy_headers(
+    client_ip: IpAddr,
+    host: &str,
+    proto: &str,
+    mut builder: RequestBuilder,
+    original_headers: &HeaderMap,
+) -> RequestBuilder {
+    if let Some(val) = original_headers.get("x-forwarded-for") {
+        builder = builder.header(
+            "x-forwarded-for",
+            format!("{},{}", val.to_str().unwrap(), client_ip),
+        );
+    } else {
+        builder = builder.header("x-forwarded-for", client_ip.to_string())
+    }
+
+    if !original_headers.contains_key("x-forwarded-host") {
+        builder = builder.header("x-forwarded-host", host)
+    }
+
+    if !original_headers.contains_key("x-forwarded-proto") {
+        builder = builder.header("x-forwarded-proto", proto)
+    }
+
+    builder
 }
 
 async fn handle_client(
@@ -286,7 +324,7 @@ async fn handle_client(
         locked_registry.create_chain(&global_middlewares)
     };
 
-    let handler = send_upstream(proxy_uri_str).clone();
+    let handler = send_upstream(proxy_uri_str, context.ip_addr).clone();
     let next = Next::new(handler, &middlewares);
     let (parts, body) = original_request.into_parts();
     let request = Request::from_parts(parts, RequestBody::new(body));
