@@ -12,7 +12,7 @@ const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
 mod access_logger;
 
-pub(crate) mod registry;
+pub mod registry;
 
 mod request_id;
 
@@ -21,7 +21,7 @@ pub use request_id::RequestID;
 
 type Result<T> = std::result::Result<T, Infallible>;
 
-pub(crate) type RequestBody = BoxBody<Bytes, Error>;
+pub type RequestBody = BoxBody<Bytes, Error>;
 
 type ResponseBody = BoxBody<Bytes, Error>;
 

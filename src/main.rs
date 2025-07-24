@@ -1,4 +1,5 @@
-use crate::config::{GatewayConfig, Protocol};
+use crate::config::{GatewayConfig, Protocol, RouteConfig, Upstream};
+use crate::load_balancer::{LoadBalancer, WeightedRoundRobin};
 use crate::middleware::registry::MiddlewareRegistry;
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
@@ -10,6 +11,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use reqwest::RequestBuilder;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -24,21 +26,61 @@ mod logger;
 
 mod middleware;
 
-pub(crate) struct RouterContext {
-    pub(crate) gateway_config: Arc<GatewayConfig>,
-    pub(crate) middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
-    pub(crate) ip_addr: IpAddr,
+mod load_balancer;
+
+struct Route {
+    methods: Vec<String>,
+    lb: Mutex<LoadBalancer>,
+}
+
+struct Router {
+    routes: HashMap<String, Arc<Route>>,
+}
+
+impl Router {
+    fn new(route_configs: Vec<RouteConfig>) -> Self {
+        let mut routes = HashMap::new();
+        for rc in route_configs {
+            let strategy = Box::new(WeightedRoundRobin::new(&rc.upstream));
+            let lb = LoadBalancer::new(strategy);
+            let route = Route {
+                methods: rc.methods,
+                lb: Mutex::new(lb),
+            };
+            routes.insert(rc.path, Arc::new(route));
+        }
+
+        Router { routes }
+    }
+
+    fn match_route(&self, path: &str, method: &str) -> Result<Upstream, StatusCode> {
+        let route = self.routes.get(path).ok_or(StatusCode::NOT_FOUND)?;
+        if route.methods.is_empty() || route.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
+        {
+            let mut lb = route.lb.lock().unwrap();
+            let upstream = lb.get_next().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+            Ok(upstream.clone())
+        } else {
+            Err(StatusCode::METHOD_NOT_ALLOWED)
+        }
+    }
+}
+
+pub struct RouterContext {
+    middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+    router: Arc<Router>,
+    ip_addr: IpAddr,
 }
 
 impl RouterContext {
-    pub(crate) fn new(
-        gateway_config: Arc<GatewayConfig>,
+    fn new(
         middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+        router: Arc<Router>,
         ip_addr: IpAddr,
     ) -> Self {
         RouterContext {
-            gateway_config,
             middleware_registry,
+            router,
             ip_addr,
         }
     }
@@ -53,6 +95,8 @@ async fn main() {
     );
 
     let gateway_config = Arc::new(config::load_config(&args[1]));
+
+    let router = Arc::new(Router::new(gateway_config.routes.clone()));
 
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -72,32 +116,29 @@ async fn main() {
     match gateway_config.server.protocol {
         Protocol::Http => {
             tracing::info!("Starting server at http://{:?}", server_addr);
-            start_http_server(listener, gateway_config, middleware_registry).await;
+            start_http_server(listener, middleware_registry, router).await;
         }
         Protocol::Https => {
             tracing::info!("Starting server at https://{:?}", server_addr);
-            start_https_server(listener, gateway_config, middleware_registry).await;
+            start_https_server(listener, gateway_config, middleware_registry, router).await;
         }
     }
 }
 
 async fn start_http_server(
     listener: TcpListener,
-    gateway_config: Arc<GatewayConfig>,
     middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+    router: Arc<Router>,
 ) {
     loop {
         let (stream, addr) = listener.accept().await.unwrap();
         tracing::info!("Connected with client: {}", addr);
 
-        let gateway_config = gateway_config.clone();
         let middleware_registry = middleware_registry.clone();
+        let router = router.clone();
         let client_handler_service = service_fn(move |req| {
-            let context = RouterContext::new(
-                gateway_config.clone(),
-                middleware_registry.clone(),
-                addr.ip(),
-            );
+            let context =
+                RouterContext::new(middleware_registry.clone(), router.clone(), addr.ip());
             handle_client(req, context)
         });
 
@@ -116,6 +157,7 @@ async fn start_https_server(
     listener: TcpListener,
     gateway_config: Arc<GatewayConfig>,
     middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+    router: Arc<Router>,
 ) {
     let cert_file = gateway_config.server.cert_file.as_ref().unwrap_or_else(|| {
         tracing::error!("Certificate file is required for https");
@@ -141,14 +183,11 @@ async fn start_https_server(
         let (stream, addr) = listener.accept().await.unwrap();
         let tls_acceptor = tls_acceptor.clone();
 
-        let gateway_config = gateway_config.clone();
         let middleware_registry = middleware_registry.clone();
+        let router = router.clone();
         let client_handler_service = service_fn(move |req| {
-            let context = RouterContext::new(
-                gateway_config.clone(),
-                middleware_registry.clone(),
-                addr.ip(),
-            );
+            let context =
+                RouterContext::new(middleware_registry.clone(), router.clone(), addr.ip());
             handle_client(req, context)
         });
 
@@ -309,14 +348,14 @@ async fn handle_client(
     let original_method = original_request.method();
 
     let route_match_result = context
-        .gateway_config
-        .match_upstream_path(original_path, original_method.as_str());
+        .router
+        .match_route(original_path, original_method.as_str());
     if let Err(status_code) = route_match_result {
         return Ok(response_with_status(status_code));
     }
 
-    let upstream_url = route_match_result.unwrap();
-    let proxy_uri_str = format!("{}{}", upstream_url, original_request.uri().path());
+    let upstream = route_match_result.unwrap();
+    let proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
 
     let middlewares = {
         let locked_registry = context.middleware_registry.lock().unwrap();

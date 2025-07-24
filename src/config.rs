@@ -1,4 +1,3 @@
-use hyper::StatusCode;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -18,7 +17,7 @@ pub enum Protocol {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ServerConfig {
+pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub protocol: Protocol,
@@ -27,55 +26,41 @@ pub(crate) struct ServerConfig {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct GatewayLog {
+pub struct GatewayLog {
     pub level: String,
     pub format: LogFormat,
     pub file_path: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct AccessLog {
+pub struct AccessLog {
     pub enabled: bool,
     pub format: LogFormat,
     pub file_path: String,
 }
 
-#[derive(Debug, PartialEq, Deserialize)]
-pub(crate) struct RouteConfig {
+#[derive(Debug, Clone, Deserialize)]
+pub struct Upstream {
+    pub url: String,
+    pub weight: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
-    pub upstream: String,
+    pub upstream: Vec<Upstream>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct GatewayConfig {
+pub struct GatewayConfig {
     pub server: ServerConfig,
     pub log: GatewayLog,
     pub access_log: AccessLog,
     pub routes: Vec<RouteConfig>,
 }
 
-impl GatewayConfig {
-    pub fn match_upstream_path(&self, path: &str, method: &str) -> Result<String, StatusCode> {
-        match self.routes.iter().find(|route| route.path == path) {
-            None => {
-                tracing::warn!("No matching route found for path {path}");
-                Err(StatusCode::NOT_FOUND)
-            }
-            Some(route) => {
-                if route.methods.is_empty()
-                    || route.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
-                {
-                    Ok(route.upstream.clone())
-                } else {
-                    Err(StatusCode::METHOD_NOT_ALLOWED)
-                }
-            }
-        }
-    }
-}
-
-pub(crate) fn load_config(file_path: &str) -> GatewayConfig {
+pub fn load_config(file_path: &str) -> GatewayConfig {
     config::Config::builder()
         .add_source(config::File::with_name(file_path))
         .build()

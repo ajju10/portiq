@@ -6,7 +6,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-pub(crate) fn init_logger(gateway_log_config: &GatewayLog, access_log_config: &AccessLog) {
+pub fn init_logger(gateway_log_config: &GatewayLog, access_log_config: &AccessLog) {
     let mut layers = vec![];
 
     let gateway_log_stream = if gateway_log_config.file_path.as_str() == "stdout" {

@@ -11,18 +11,18 @@ pub struct MiddlewareRegistry {
 }
 
 impl MiddlewareRegistry {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         MiddlewareRegistry {
             middlewares: HashMap::new(),
         }
     }
 
-    pub(crate) fn register(&mut self, name: &str, middleware: impl MiddlewareFactory) {
+    pub fn register(&mut self, name: &str, middleware: impl MiddlewareFactory) {
         self.middlewares
             .insert(name.to_string(), middleware.create());
     }
 
-    pub(crate) fn create_chain(&self, names: &[String]) -> Vec<Arc<dyn Middleware>> {
+    pub fn create_chain(&self, names: &[String]) -> Vec<Arc<dyn Middleware>> {
         names
             .iter()
             .filter_map(|name| self.middlewares.get(name).cloned())
