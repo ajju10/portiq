@@ -23,10 +23,10 @@ impl MiddlewareRegistry {
         }
     }
 
-    pub fn create_chain(&self, names: Vec<String>) -> Vec<Arc<dyn Middleware>> {
+    pub fn create_chain(&self, names: Vec<&str>) -> Vec<Arc<dyn Middleware>> {
         names
             .iter()
-            .filter_map(|name| self.middlewares.get(name).cloned())
+            .filter_map(|name| self.middlewares.get(*name).cloned())
             .collect()
     }
 }
