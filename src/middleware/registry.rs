@@ -17,15 +17,16 @@ impl MiddlewareRegistry {
         }
     }
 
-    pub fn register(&mut self, name: &str, middleware: impl MiddlewareFactory) {
-        self.middlewares
-            .insert(name.to_string(), middleware.create());
+    pub fn register_all(&mut self, middlewares: Vec<(&str, Box<dyn MiddlewareFactory>)>) {
+        for (name, factory) in middlewares {
+            self.middlewares.insert(name.to_string(), factory.create());
+        }
     }
 
-    pub fn create_chain(&self, names: &[String]) -> Vec<Arc<dyn Middleware>> {
+    pub fn create_chain(&self, names: &[&str]) -> Vec<Arc<dyn Middleware>> {
         names
             .iter()
-            .filter_map(|name| self.middlewares.get(name).cloned())
+            .filter_map(|name| self.middlewares.get(*name).cloned())
             .collect()
     }
 }

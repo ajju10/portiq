@@ -1,6 +1,6 @@
 use crate::config::{GatewayConfig, Protocol, RouteConfig, Upstream};
 use crate::load_balancer::{LoadBalancer, WeightedRoundRobin};
-use crate::middleware::registry::MiddlewareRegistry;
+use crate::middleware::registry::{MiddlewareFactory, MiddlewareRegistry};
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::{
@@ -67,14 +67,14 @@ impl Router {
 }
 
 pub struct RouterContext {
-    middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+    middleware_registry: Arc<MiddlewareRegistry>,
     router: Arc<Router>,
     ip_addr: IpAddr,
 }
 
 impl RouterContext {
     fn new(
-        middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+        middleware_registry: Arc<MiddlewareRegistry>,
         router: Arc<Router>,
         ip_addr: IpAddr,
     ) -> Self {
@@ -102,12 +102,13 @@ async fn main() {
 
     logger::init_logger(&gateway_config.log, &gateway_config.access_log);
 
-    let middleware_registry = Arc::new(Mutex::new(MiddlewareRegistry::new()));
-    {
-        let mut locked_registry = middleware_registry.lock().unwrap();
-        locked_registry.register("request_id", RequestID);
-        locked_registry.register("access_logger", AccessLogger);
-    }
+    let middlewares: Vec<(&str, Box<dyn MiddlewareFactory>)> = vec![
+        ("request_id", Box::new(RequestID)),
+        ("access_logger", Box::new(AccessLogger)),
+    ];
+    let mut middleware_registry = MiddlewareRegistry::new();
+    middleware_registry.register_all(middlewares);
+    let middleware_registry = Arc::new(middleware_registry);
 
     let ip_addr = IpAddr::from_str(&gateway_config.server.host).expect("Host must be valid");
     let server_addr = SocketAddr::from((ip_addr, gateway_config.server.port));
@@ -127,7 +128,7 @@ async fn main() {
 
 async fn start_http_server(
     listener: TcpListener,
-    middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+    middleware_registry: Arc<MiddlewareRegistry>,
     router: Arc<Router>,
 ) {
     loop {
@@ -156,7 +157,7 @@ async fn start_http_server(
 async fn start_https_server(
     listener: TcpListener,
     gateway_config: Arc<GatewayConfig>,
-    middleware_registry: Arc<Mutex<MiddlewareRegistry>>,
+    middleware_registry: Arc<MiddlewareRegistry>,
     router: Arc<Router>,
 ) {
     let cert_file = gateway_config.server.cert_file.as_ref().unwrap_or_else(|| {
@@ -357,11 +358,8 @@ async fn handle_client(
     let upstream = route_match_result.unwrap();
     let proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
 
-    let middlewares = {
-        let locked_registry = context.middleware_registry.lock().unwrap();
-        let global_middlewares = ["request_id".to_string(), "access_logger".to_string()];
-        locked_registry.create_chain(&global_middlewares)
-    };
+    let global_middlewares = ["request_id", "access_logger"];
+    let middlewares = context.middleware_registry.create_chain(&global_middlewares);
 
     let handler = send_upstream(proxy_uri_str, context.ip_addr).clone();
     let next = Next::new(handler, &middlewares);
