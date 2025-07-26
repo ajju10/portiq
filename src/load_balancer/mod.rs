@@ -1,13 +1,14 @@
 use crate::config::Upstream;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub trait LoadBalancerStrategy: Send {
-    fn select(&mut self) -> Option<&Upstream>;
+pub trait LoadBalancerStrategy: Send + Sync {
+    fn select(&self) -> Option<&Upstream>;
 }
 
 pub struct WeightedRoundRobin {
     upstreams: Box<[Upstream]>,
     weighted: Box<[u16]>,
-    next_index: usize,
+    next_index: AtomicUsize,
 }
 
 impl WeightedRoundRobin {
@@ -28,25 +29,30 @@ impl WeightedRoundRobin {
         WeightedRoundRobin {
             upstreams: servers,
             weighted: weighted.into_boxed_slice(),
-            next_index: 0,
+            next_index: AtomicUsize::new(0),
         }
     }
 }
 
 impl LoadBalancerStrategy for WeightedRoundRobin {
-    fn select(&mut self) -> Option<&Upstream> {
+    fn select(&self) -> Option<&Upstream> {
         if self.weighted.is_empty() {
             return None;
         }
 
-        let index = self.weighted[self.next_index] as usize;
-        self.next_index = (self.next_index + 1) % self.weighted.len();
-        Some(&self.upstreams[index])
+        let next_index = self.next_index.load(Ordering::Relaxed);
+        let upstream_index = self.weighted[next_index] as usize;
+        self.next_index
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
+                Some((x + 1) % self.weighted.len())
+            })
+            .unwrap_or(0);
+        Some(&self.upstreams[upstream_index])
     }
 }
 
 pub struct LoadBalancer {
-    strategy: Box<dyn LoadBalancerStrategy + Send>,
+    strategy: Box<dyn LoadBalancerStrategy>,
 }
 
 impl LoadBalancer {
@@ -54,7 +60,7 @@ impl LoadBalancer {
         LoadBalancer { strategy }
     }
 
-    pub fn get_next(&mut self) -> Option<&Upstream> {
+    pub fn get_next(&self) -> Option<&Upstream> {
         self.strategy.select()
     }
 }

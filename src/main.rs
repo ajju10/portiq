@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{env, fs, io};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -30,11 +30,11 @@ mod load_balancer;
 
 struct Route {
     methods: Vec<String>,
-    lb: Mutex<LoadBalancer>,
+    lb: LoadBalancer,
 }
 
 struct Router {
-    routes: HashMap<String, Arc<Route>>,
+    routes: HashMap<String, Route>,
 }
 
 impl Router {
@@ -45,9 +45,9 @@ impl Router {
             let lb = LoadBalancer::new(strategy);
             let route = Route {
                 methods: rc.methods,
-                lb: Mutex::new(lb),
+                lb,
             };
-            routes.insert(rc.path, Arc::new(route));
+            routes.insert(rc.path, route);
         }
 
         Router { routes }
@@ -57,8 +57,7 @@ impl Router {
         let route = self.routes.get(path).ok_or(StatusCode::NOT_FOUND)?;
         if route.methods.is_empty() || route.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
         {
-            let mut lb = route.lb.lock().unwrap();
-            let upstream = lb.get_next().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+            let upstream = route.lb.get_next().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
             Ok(upstream.clone())
         } else {
             Err(StatusCode::METHOD_NOT_ALLOWED)
