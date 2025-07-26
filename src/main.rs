@@ -358,8 +358,8 @@ async fn handle_client(
     let upstream = route_match_result.unwrap();
     let proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
 
-    let global_middlewares = vec!["request_id", "access_logger"];
-    let middlewares = context.middleware_registry.create_chain(global_middlewares);
+    let global_middlewares = ["request_id", "access_logger"];
+    let middlewares = context.middleware_registry.create_chain(&global_middlewares);
 
     let handler = send_upstream(proxy_uri_str, context.ip_addr).clone();
     let next = Next::new(handler, &middlewares);
