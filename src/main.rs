@@ -16,6 +16,7 @@ use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{env, fs, io};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -69,6 +70,7 @@ pub struct RouterContext {
     middleware_registry: Arc<MiddlewareRegistry>,
     router: Arc<Router>,
     ip_addr: IpAddr,
+    http_client: Arc<reqwest::Client>,
 }
 
 impl RouterContext {
@@ -76,11 +78,13 @@ impl RouterContext {
         middleware_registry: Arc<MiddlewareRegistry>,
         router: Arc<Router>,
         ip_addr: IpAddr,
+        http_client: Arc<reqwest::Client>,
     ) -> Self {
         RouterContext {
             middleware_registry,
             router,
             ip_addr,
+            http_client,
         }
     }
 }
@@ -101,6 +105,12 @@ async fn main() {
 
     logger::init_logger(&gateway_config.log, &gateway_config.access_log);
 
+    let http_client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("Invalid tls config");
+
     let middlewares: Vec<(&str, Box<dyn MiddlewareFactory>)> = vec![
         ("request_id", Box::new(RequestID)),
         ("access_logger", Box::new(AccessLogger)),
@@ -116,11 +126,18 @@ async fn main() {
     match gateway_config.server.protocol {
         Protocol::Http => {
             tracing::info!("Starting server at http://{:?}", server_addr);
-            start_http_server(listener, middleware_registry, router).await;
+            start_http_server(listener, middleware_registry, router, Arc::new(http_client)).await;
         }
         Protocol::Https => {
             tracing::info!("Starting server at https://{:?}", server_addr);
-            start_https_server(listener, gateway_config, middleware_registry, router).await;
+            start_https_server(
+                listener,
+                gateway_config,
+                middleware_registry,
+                router,
+                Arc::new(http_client),
+            )
+            .await;
         }
     }
 }
@@ -129,6 +146,7 @@ async fn start_http_server(
     listener: TcpListener,
     middleware_registry: Arc<MiddlewareRegistry>,
     router: Arc<Router>,
+    http_client: Arc<reqwest::Client>,
 ) {
     loop {
         let (stream, addr) = listener.accept().await.unwrap();
@@ -136,9 +154,14 @@ async fn start_http_server(
 
         let middleware_registry = middleware_registry.clone();
         let router = router.clone();
+        let http_client = http_client.clone();
         let client_handler_service = service_fn(move |req| {
-            let context =
-                RouterContext::new(middleware_registry.clone(), router.clone(), addr.ip());
+            let context = RouterContext::new(
+                middleware_registry.clone(),
+                router.clone(),
+                addr.ip(),
+                http_client.clone(),
+            );
             handle_client(req, context)
         });
 
@@ -158,6 +181,7 @@ async fn start_https_server(
     gateway_config: Arc<GatewayConfig>,
     middleware_registry: Arc<MiddlewareRegistry>,
     router: Arc<Router>,
+    http_client: Arc<reqwest::Client>,
 ) {
     let cert_file = gateway_config.server.cert_file.as_ref().unwrap_or_else(|| {
         tracing::error!("Certificate file is required for https");
@@ -185,9 +209,14 @@ async fn start_https_server(
 
         let middleware_registry = middleware_registry.clone();
         let router = router.clone();
+        let http_client = http_client.clone();
         let client_handler_service = service_fn(move |req| {
-            let context =
-                RouterContext::new(middleware_registry.clone(), router.clone(), addr.ip());
+            let context = RouterContext::new(
+                middleware_registry.clone(),
+                router.clone(),
+                addr.ip(),
+                http_client.clone(),
+            );
             handle_client(req, context)
         });
 
@@ -271,7 +300,11 @@ fn error(err: String) -> io::Error {
     io::Error::other(err)
 }
 
-fn send_upstream(upstream_url: String, client_ip: IpAddr) -> HandlerFunc {
+fn send_upstream(
+    upstream_url: String,
+    client_ip: IpAddr,
+    http_client: Arc<reqwest::Client>,
+) -> HandlerFunc {
     Arc::new(move |req: Request<RequestBody>| {
         let url = upstream_url.clone();
         let client_ip = client_ip;
@@ -286,8 +319,7 @@ fn send_upstream(upstream_url: String, client_ip: IpAddr) -> HandlerFunc {
             "http"
         };
 
-        let req_client = reqwest::Client::new();
-        let mut request_builder = req_client.request(req.method().clone(), url);
+        let mut request_builder = http_client.request(req.method().clone(), url);
         request_builder =
             set_proxy_headers(client_ip, &host, proto, request_builder, req.headers());
 
@@ -358,9 +390,11 @@ async fn handle_client(
     let proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
 
     let global_middlewares = ["request_id", "access_logger"];
-    let middlewares = context.middleware_registry.create_chain(&global_middlewares);
+    let middlewares = context
+        .middleware_registry
+        .create_chain(&global_middlewares);
 
-    let handler = send_upstream(proxy_uri_str, context.ip_addr).clone();
+    let handler = send_upstream(proxy_uri_str, context.ip_addr, context.http_client).clone();
     let next = Next::new(handler, &middlewares);
     let (parts, body) = original_request.into_parts();
     let request = Request::from_parts(parts, RequestBody::new(body));
