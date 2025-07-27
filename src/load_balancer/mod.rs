@@ -64,3 +64,82 @@ impl LoadBalancer {
         self.strategy.select()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn test_weight_distribution() {
+        let upstreams = vec![
+            Upstream {
+                url: "server1".to_string(),
+                weight: 3,
+            },
+            Upstream {
+                url: "server2".to_string(),
+                weight: 1,
+            },
+        ];
+        let lb = WeightedRoundRobin::new(&upstreams);
+
+        let mut counts = HashMap::new();
+        for _ in 0..1000 {
+            if let Some(upstream) = lb.select() {
+                *counts.entry(upstream.url.clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Should be around 75% server1, 25% server2
+        assert!(counts["server1"] > 700 && counts["server1"] < 800);
+        assert!(counts["server2"] > 200 && counts["server2"] < 300);
+    }
+
+    #[test]
+    fn test_round_robin_cycle() {
+        let upstreams = vec![
+            Upstream {
+                url: "server1".to_string(),
+                weight: 1,
+            },
+            Upstream {
+                url: "server2".to_string(),
+                weight: 1,
+            },
+        ];
+        let lb = WeightedRoundRobin::new(&upstreams);
+
+        let server1 = lb.select().unwrap();
+        let server2 = lb.select().unwrap();
+        let server3 = lb.select().unwrap();
+
+        assert_eq!(server1.url, upstreams[0].url);
+        assert_eq!(server2.url, upstreams[1].url);
+        assert_eq!(server3.url, upstreams[0].url);
+    }
+
+    #[test]
+    fn test_no_upstream_returns_none() {
+        let upstreams = vec![];
+        let lb = WeightedRoundRobin::new(&upstreams);
+        assert!(lb.select().is_none())
+    }
+
+    #[test]
+    fn test_zero_weight_returns_none() {
+        let upstreams = vec![
+            Upstream {
+                url: "server1".to_string(),
+                weight: 0,
+            },
+            Upstream {
+                url: "server2".to_string(),
+                weight: 0,
+            },
+        ];
+        let lb = WeightedRoundRobin::new(&upstreams);
+        assert!(lb.select().is_none())
+    }
+}
