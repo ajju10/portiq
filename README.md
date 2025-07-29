@@ -1,4 +1,4 @@
-# Portiq: A High-Performance HTTP(S) API Gateway in Rust
+# Portiq: A simple HTTP(S) API Gateway in Rust
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust Version](https://img.shields.io/badge/rust-1.79%2B-orange.svg)](https://www.rust-lang.org/)
