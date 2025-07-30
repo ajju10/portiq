@@ -990,6 +990,7 @@ dependencies = [
  "rustls-pemfile",
  "rustls-pki-types",
  "serde",
+ "thiserror",
  "tokio",
  "tokio-rustls",
  "tracing",

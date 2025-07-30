@@ -1,4 +1,5 @@
 use crate::config::{GatewayConfig, Protocol, RouteConfig, Upstream};
+use crate::error::RouterError;
 use crate::load_balancer::{LoadBalancer, WeightedRoundRobin};
 use crate::middleware::registry::{MiddlewareFactory, MiddlewareRegistry};
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
@@ -10,18 +11,22 @@ use hyper::{
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use reqwest::RequestBuilder;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::env;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{env, fs, io};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
+use crate::utils::{load_certs, load_private_key};
 
 mod config;
+
+mod error;
+
+mod utils;
 
 mod logger;
 
@@ -54,14 +59,15 @@ impl Router {
         Router { routes }
     }
 
-    fn match_route(&self, path: &str, method: &str) -> Result<Upstream, StatusCode> {
-        let route = self.routes.get(path).ok_or(StatusCode::NOT_FOUND)?;
+    fn match_route(&self, path: &str, method: &str) -> Result<Upstream, RouterError> {
+        let route = self.routes.get(path).ok_or(RouterError::NotFound)?;
         if route.methods.is_empty() || route.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
         {
-            let upstream = route.lb.get_next().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+            let upstream = route.lb.get_next().ok_or(RouterError::NoUpstream)?;
             Ok(upstream.clone())
         } else {
-            Err(StatusCode::METHOD_NOT_ALLOWED)
+            tracing::warn!("Router error: Method not allowed");
+            Err(RouterError::MethodNotAllowed)
         }
     }
 }
@@ -274,32 +280,6 @@ fn response_with_status(status_code: StatusCode) -> Response<BoxBody<Bytes, hype
         .unwrap()
 }
 
-// Load public certificate from file.
-fn load_certs(filename: &str) -> io::Result<Vec<CertificateDer<'static>>> {
-    // Open certificate file.
-    let certfile =
-        fs::File::open(filename).map_err(|e| error(format!("failed to open {filename}: {e}")))?;
-    let mut reader = io::BufReader::new(certfile);
-
-    // Load and return certificate.
-    rustls_pemfile::certs(&mut reader).collect()
-}
-
-// Load private key from file.
-fn load_private_key(filename: &str) -> io::Result<PrivateKeyDer<'static>> {
-    // Open keyfile.
-    let keyfile =
-        fs::File::open(filename).map_err(|e| error(format!("failed to open {filename}: {e}")))?;
-    let mut reader = io::BufReader::new(keyfile);
-
-    // Load and return a single private key.
-    rustls_pemfile::private_key(&mut reader).map(|key| key.unwrap())
-}
-
-fn error(err: String) -> io::Error {
-    io::Error::other(err)
-}
-
 fn send_upstream(
     upstream_url: String,
     client_ip: IpAddr,
@@ -379,24 +359,25 @@ async fn handle_client(
     let original_path = original_request.uri().path();
     let original_method = original_request.method();
 
-    let route_match_result = context
-        .router
-        .match_route(original_path, original_method.as_str());
-    if let Err(status_code) = route_match_result {
-        return Ok(response_with_status(status_code));
+    let router = context.router;
+    match router.match_route(original_path, original_method.as_str()) {
+        Ok(upstream) => {
+            let proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
+
+            let global_middlewares = ["request_id", "access_logger"];
+            let middlewares = context
+                .middleware_registry
+                .create_chain(&global_middlewares);
+
+            let handler =
+                send_upstream(proxy_uri_str, context.ip_addr, context.http_client).clone();
+            let next = Next::new(handler, &middlewares);
+            let (parts, body) = original_request.into_parts();
+            let request = Request::from_parts(parts, RequestBody::new(body));
+            next.run(request).await
+        }
+        Err(err) => {
+            Ok(response_with_status(err.status_code()))
+        }
     }
-
-    let upstream = route_match_result.unwrap();
-    let proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
-
-    let global_middlewares = ["request_id", "access_logger"];
-    let middlewares = context
-        .middleware_registry
-        .create_chain(&global_middlewares);
-
-    let handler = send_upstream(proxy_uri_str, context.ip_addr, context.http_client).clone();
-    let next = Next::new(handler, &middlewares);
-    let (parts, body) = original_request.into_parts();
-    let request = Request::from_parts(parts, RequestBody::new(body));
-    next.run(request).await
 }
