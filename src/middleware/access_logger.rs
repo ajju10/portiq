@@ -4,8 +4,7 @@ use crate::middleware::{Middleware, Next, REQUEST_ID_HEADER, RequestBody, Respon
 use async_trait::async_trait;
 use hyper::header::USER_AGENT;
 use hyper::{Request, Response};
-use std::net::IpAddr;
-use std::str::FromStr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -30,7 +29,7 @@ impl Middleware for AccessLogger {
         let client_ip = req
             .extensions()
             .get::<IpAddr>()
-            .unwrap_or(&IpAddr::from_str("127.0.0.1").unwrap())
+            .unwrap_or(&IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))
             .to_owned();
         let request_id = req
             .headers()
