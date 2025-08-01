@@ -3,11 +3,11 @@ use crate::error::RouterError;
 use crate::load_balancer::{LoadBalancer, WeightedRoundRobin};
 use crate::middleware::registry::{MiddlewareFactory, MiddlewareRegistry};
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
-use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
-use hyper::{
-    HeaderMap, Method, Request, Response, StatusCode, body::Bytes, body::Incoming,
-    service::service_fn,
-};
+use crate::utils::{bad_gateway_response, load_certs, load_private_key, response_with_status};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use hyper::body::{Bytes, Incoming};
+use hyper::service::service_fn;
+use hyper::{HeaderMap, Method, Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use reqwest::RequestBuilder;
@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
-use crate::utils::{load_certs, load_private_key};
 
 mod config;
 
@@ -246,40 +245,6 @@ async fn start_https_server(
     }
 }
 
-fn bad_gateway_response() -> Response<BoxBody<Bytes, hyper::Error>> {
-    let html_res = r#"<!DOCTYPE html>
-        <html>
-        <head>
-        <title>502 Bad Gateway</title>
-        </head>
-        <body>
-        <center><h1>502 Bad Gateway</h1></center>
-        <hr><center>portiq</center>
-        </body>
-        </html>"#;
-
-    let body = Full::new(Bytes::from_owner(html_res));
-    let boxed_body = BoxBody::new(body).map_err(|never| match never {}).boxed();
-    Response::builder()
-        .status(StatusCode::BAD_GATEWAY)
-        .header("Server", "portiq")
-        .header("Content-Type", "text/html; charset=utf-8")
-        .body(boxed_body)
-        .expect("Failed to construct response")
-}
-
-fn response_with_status(status_code: StatusCode) -> Response<BoxBody<Bytes, hyper::Error>> {
-    Response::builder()
-        .status(status_code)
-        .header("X-Proxy-Name", "portiq")
-        .body(
-            Empty::<Bytes>::new()
-                .map_err(|never| match never {})
-                .boxed(),
-        )
-        .unwrap()
-}
-
 fn send_upstream(
     upstream_url: String,
     client_ip: IpAddr,
@@ -376,8 +341,6 @@ async fn handle_client(
             let request = Request::from_parts(parts, RequestBody::new(body));
             next.run(request).await
         }
-        Err(err) => {
-            Ok(response_with_status(err.status_code()))
-        }
+        Err(err) => Ok(response_with_status(err.status_code())),
     }
 }
