@@ -1,8 +1,7 @@
-use crate::config::{GatewayConfig, Protocol, RouteConfig, Upstream};
-use crate::error::RouterError;
-use crate::load_balancer::{LoadBalancer, WeightedRoundRobin};
+use crate::config::{GatewayConfig, Protocol};
 use crate::middleware::registry::{MiddlewareFactory, MiddlewareRegistry};
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
+use crate::router::Router;
 use crate::utils::{bad_gateway_response, load_certs, load_private_key, response_with_status};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming};
@@ -11,7 +10,6 @@ use hyper::{HeaderMap, Method, Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use reqwest::RequestBuilder;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
@@ -23,6 +21,8 @@ use tokio_rustls::TlsAcceptor;
 
 mod config;
 
+mod router;
+
 mod error;
 
 mod utils;
@@ -32,44 +32,6 @@ mod logger;
 mod middleware;
 
 mod load_balancer;
-
-struct Route {
-    methods: Vec<String>,
-    lb: LoadBalancer,
-}
-
-struct Router {
-    routes: HashMap<String, Route>,
-}
-
-impl Router {
-    fn new(route_configs: Vec<RouteConfig>) -> Self {
-        let mut routes = HashMap::new();
-        for rc in route_configs {
-            let strategy = Box::new(WeightedRoundRobin::new(&rc.upstream));
-            let lb = LoadBalancer::new(strategy);
-            let route = Route {
-                methods: rc.methods,
-                lb,
-            };
-            routes.insert(rc.path, route);
-        }
-
-        Router { routes }
-    }
-
-    fn match_route(&self, path: &str, method: &str) -> Result<Upstream, RouterError> {
-        let route = self.routes.get(path).ok_or(RouterError::NotFound)?;
-        if route.methods.is_empty() || route.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
-        {
-            let upstream = route.lb.get_next().ok_or(RouterError::NoUpstream)?;
-            Ok(upstream.clone())
-        } else {
-            tracing::warn!("Router error: Method not allowed");
-            Err(RouterError::MethodNotAllowed)
-        }
-    }
-}
 
 pub struct RouterContext {
     middleware_registry: Arc<MiddlewareRegistry>,
