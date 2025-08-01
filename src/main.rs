@@ -16,6 +16,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
@@ -92,11 +93,11 @@ async fn main() {
 
     match gateway_config.server.protocol {
         Protocol::Http => {
-            tracing::info!("Starting server at http://{:?}", server_addr);
+            tracing::info!("Starting server at http://{server_addr}");
             start_http_server(listener, middleware_registry, router, Arc::new(http_client)).await;
         }
         Protocol::Https => {
-            tracing::info!("Starting server at https://{:?}", server_addr);
+            tracing::info!("Starting server at https://{server_addr}");
             start_https_server(
                 listener,
                 gateway_config,
@@ -109,6 +110,33 @@ async fn main() {
     }
 }
 
+async fn serve_incoming_connection<S>(
+    stream: S,
+    middleware_registry: Arc<MiddlewareRegistry>,
+    router: Arc<Router>,
+    addr: SocketAddr,
+    http_client: Arc<reqwest::Client>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + 'static,
+{
+    let service = service_fn(move |req| {
+        let context = RouterContext::new(
+            middleware_registry.clone(),
+            router.clone(),
+            addr.ip(),
+            http_client.clone(),
+        );
+        handle_client(req, context)
+    });
+
+    if let Err(err) = auto::Builder::new(TokioExecutor::new())
+        .serve_connection(TokioIo::new(stream), service)
+        .await
+    {
+        tracing::error!("Error serving connection: {err}");
+    }
+}
+
 async fn start_http_server(
     listener: TcpListener,
     middleware_registry: Arc<MiddlewareRegistry>,
@@ -117,28 +145,21 @@ async fn start_http_server(
 ) {
     loop {
         let (stream, addr) = listener.accept().await.unwrap();
-        tracing::info!("Connected with client: {}", addr);
+        tracing::info!("Connected with client {addr} over http");
 
         let middleware_registry = middleware_registry.clone();
         let router = router.clone();
         let http_client = http_client.clone();
-        let client_handler_service = service_fn(move |req| {
-            let context = RouterContext::new(
-                middleware_registry.clone(),
-                router.clone(),
-                addr.ip(),
-                http_client.clone(),
-            );
-            handle_client(req, context)
-        });
 
         tokio::spawn(async move {
-            if let Err(err) = auto::Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(stream), client_handler_service)
-                .await
-            {
-                tracing::error!("Error serving connection: {:?}", err);
-            }
+            serve_incoming_connection(
+                stream,
+                middleware_registry.clone(),
+                router.clone(),
+                addr,
+                http_client.clone(),
+            )
+            .await;
         });
     }
 }
@@ -177,32 +198,25 @@ async fn start_https_server(
         let middleware_registry = middleware_registry.clone();
         let router = router.clone();
         let http_client = http_client.clone();
-        let client_handler_service = service_fn(move |req| {
-            let context = RouterContext::new(
-                middleware_registry.clone(),
-                router.clone(),
-                addr.ip(),
-                http_client.clone(),
-            );
-            handle_client(req, context)
-        });
 
         tokio::spawn(async move {
             let tls_stream = match tls_acceptor.accept(stream).await {
                 Ok(tls_stream) => tls_stream,
                 Err(err) => {
-                    tracing::error!("failed to perform tls handshake: {err:#}");
+                    tracing::error!("Failed to perform tls handshake: {err}");
                     return;
                 }
             };
-            tracing::info!("Connected with client: {} over TLS", addr);
+            tracing::info!("Connected with client {addr} over https");
 
-            if let Err(err) = auto::Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(tls_stream), client_handler_service)
-                .await
-            {
-                tracing::error!("Error serving connection: {err:#}");
-            }
+            serve_incoming_connection(
+                tls_stream,
+                middleware_registry.clone(),
+                router.clone(),
+                addr,
+                http_client.clone(),
+            )
+            .await;
         });
     }
 }
