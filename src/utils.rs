@@ -8,7 +8,7 @@ use std::{fs, io};
 // Load public certificate from file.
 pub fn load_certs(filename: &str) -> io::Result<Vec<CertificateDer<'static>>> {
     let certfile = fs::File::open(filename)
-        .map_err(|e| io::Error::other(format!("failed to open {filename}: {e}")))?;
+        .map_err(|e| io::Error::other(format!("Failed to open {filename}: {e}")))?;
     let mut reader = io::BufReader::new(certfile);
     rustls_pemfile::certs(&mut reader).collect()
 }
@@ -16,7 +16,7 @@ pub fn load_certs(filename: &str) -> io::Result<Vec<CertificateDer<'static>>> {
 // Load private key from file.
 pub fn load_private_key(filename: &str) -> io::Result<PrivateKeyDer<'static>> {
     let keyfile = fs::File::open(filename)
-        .map_err(|e| io::Error::other(format!("failed to open {filename}: {e}")))?;
+        .map_err(|e| io::Error::other(format!("Failed to open {filename}: {e}")))?;
     let mut reader = io::BufReader::new(keyfile);
     rustls_pemfile::private_key(&mut reader).map(|key| key.unwrap())
 }
@@ -24,7 +24,7 @@ pub fn load_private_key(filename: &str) -> io::Result<PrivateKeyDer<'static>> {
 pub fn response_with_status(status_code: StatusCode) -> Response<BoxBody<Bytes, hyper::Error>> {
     Response::builder()
         .status(status_code)
-        .header("X-Proxy-Name", "portiq")
+        .header("Server", "portiq")
         .body(
             Empty::<Bytes>::new()
                 .map_err(|never| match never {})
