@@ -253,10 +253,19 @@ fn send_upstream(
 
             match request_builder.send().await {
                 Ok(resp) => {
-                    let resp = resp.bytes().await.unwrap();
-                    let body = Full::from(resp);
-                    let response =
-                        Response::new(BoxBody::new(body).map_err(|never| match never {}).boxed());
+                    let mut response_builder = Response::builder().status(resp.status());
+                    for (key, value) in resp.headers() {
+                        if key != "server" {
+                            response_builder = response_builder.header(key, value);
+                        } else {
+                            response_builder = response_builder.header("Server", "portiq");
+                        }
+                    }
+                    let resp_bytes = resp.bytes().await.unwrap();
+                    let body = Full::from(resp_bytes);
+                    let response = response_builder
+                        .body(BoxBody::new(body).map_err(|never| match never {}).boxed())
+                        .unwrap();
                     Ok(response)
                 }
                 Err(_) => Ok(bad_gateway_response()),
