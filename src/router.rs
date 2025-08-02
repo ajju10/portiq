@@ -1,41 +1,51 @@
 use crate::config::{RouteConfig, Upstream};
 use crate::error::RouterError;
 use crate::load_balancer::{LoadBalancer, WeightedRoundRobin};
-use std::collections::HashMap;
+use matchit::Router as MatchItRouter;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 struct Route {
-    methods: Vec<String>,
+    methods: HashSet<String>,
     lb: LoadBalancer,
 }
 
 pub struct Router {
-    routes: HashMap<String, Route>,
+    inner: MatchItRouter<Arc<Route>>,
 }
 
 impl Router {
     pub fn new(route_configs: Vec<RouteConfig>) -> Self {
-        let mut routes = HashMap::new();
+        let mut inner = MatchItRouter::new();
         for rc in route_configs {
             let strategy = Box::new(WeightedRoundRobin::new(&rc.upstream));
             let lb = LoadBalancer::new(strategy);
-            let route = Route {
-                methods: rc.methods,
+            let route = Arc::new(Route {
+                methods: rc.methods.into_iter().collect(),
                 lb,
-            };
-            routes.insert(rc.path, route);
+            });
+
+            // Exact match like /api/v1
+            inner.insert(rc.path.as_str(), route.clone()).unwrap();
+
+            // Trailing slash match like /api/v1/
+            inner
+                .insert(format!("{}/", rc.path.as_str()), route.clone())
+                .unwrap();
+
+            // Wildcard match like /api/v1/*
+            inner.insert(format!("{}/{{*p}}", rc.path), route).unwrap();
         }
 
-        Router { routes }
+        Router { inner }
     }
 
     pub fn match_route(&self, path: &str, method: &str) -> Result<Upstream, RouterError> {
-        let route = self.routes.get(path).ok_or(RouterError::NotFound)?;
-        if route.methods.is_empty() || route.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
-        {
-            let upstream = route.lb.get_next().ok_or(RouterError::NoUpstream)?;
+        let matched = self.inner.at(path).map_err(|_| RouterError::NotFound)?;
+        if matched.value.methods.is_empty() || matched.value.methods.contains(method) {
+            let upstream = matched.value.lb.get_next().ok_or(RouterError::NoUpstream)?;
             Ok(upstream.clone())
         } else {
-            tracing::warn!("Router error: Method not allowed");
             Err(RouterError::MethodNotAllowed)
         }
     }
@@ -109,5 +119,20 @@ mod tests {
         let health_result = router.match_route("/api/health", "POST");
         assert!(health_result.is_ok());
         assert_eq!(health_result.unwrap().url, "http://localhost:5001");
+    }
+
+    #[test]
+    fn test_prefix_path_matches() {
+        let router = build_router();
+        let exact_match = router.match_route("/api/test", "GET");
+        let trailing_slash_match = router.match_route("/api/test/", "GET");
+        let wildcard_match = router.match_route("/api/test/new", "GET");
+
+        assert!(exact_match.is_ok(), "Expected exact match to succeed");
+        assert!(
+            trailing_slash_match.is_ok(),
+            "Expected trailing slash match to succeed"
+        );
+        assert!(wildcard_match.is_ok(), "Expected wildcard match to succeed");
     }
 }

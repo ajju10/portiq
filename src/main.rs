@@ -1,4 +1,5 @@
 use crate::config::{GatewayConfig, Protocol};
+use crate::error::RouterError;
 use crate::middleware::registry::{MiddlewareFactory, MiddlewareRegistry};
 use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
 use crate::router::Router;
@@ -228,7 +229,6 @@ fn send_upstream(
 ) -> HandlerFunc {
     Arc::new(move |req: Request<RequestBody>| {
         let url = upstream_url.clone();
-        let client_ip = client_ip;
         let host = if let Some(val) = req.headers().get("host") {
             String::from(val.to_str().unwrap())
         } else {
@@ -307,12 +307,16 @@ async fn handle_client(
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
     let original_request = request;
     let original_path = original_request.uri().path();
+    let original_query_params = original_request.uri().query();
     let original_method = original_request.method();
 
     let router = context.router;
     match router.match_route(original_path, original_method.as_str()) {
         Ok(upstream) => {
-            let proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
+            let mut proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
+            if let Some(params) = original_query_params {
+                proxy_uri_str = format!("{proxy_uri_str}?{params}");
+            }
 
             let global_middlewares = ["request_id", "access_logger"];
             let middlewares = context
@@ -326,6 +330,19 @@ async fn handle_client(
             let request = Request::from_parts(parts, RequestBody::new(body));
             next.run(request).await
         }
-        Err(err) => Ok(response_with_status(err.status_code())),
+        Err(err) => {
+            match err {
+                RouterError::NotFound => {
+                    tracing::warn!("Router error: Route not found for path {original_path}")
+                }
+                RouterError::MethodNotAllowed => tracing::warn!(
+                    "Router error: Method {original_method} not allowed for path {original_path}"
+                ),
+                RouterError::NoUpstream => tracing::warn!(
+                    "Router error: No upstream available to handle request for path {original_path}"
+                ),
+            }
+            Ok(response_with_status(err.status_code()))
+        }
     }
 }
