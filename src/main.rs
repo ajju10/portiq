@@ -19,6 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::watch::{Receiver, Sender};
 use tokio_rustls::TlsAcceptor;
 
 mod config;
@@ -56,6 +58,26 @@ impl RouterContext {
             http_client,
         }
     }
+}
+
+async fn shutdown_signal() {
+    let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT");
+    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to install SIGTERM");
+    tokio::select! {
+        _ = sigint.recv() => {
+            tracing::info!("Received SIGINT");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("Received SIGTERM");
+        }
+    }
+}
+
+async fn initiate_shutdown(shutdown_tx: Sender<bool>) {
+    tracing::info!("Shutdown initiated. No longer accepting connections");
+    tracing::info!("Server will stop after 5 seconds");
+    shutdown_tx.send(true).unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
 }
 
 #[tokio::main]
@@ -117,6 +139,7 @@ async fn serve_incoming_connection<S>(
     router: Arc<Router>,
     addr: SocketAddr,
     http_client: Arc<reqwest::Client>,
+    mut shutdown_rx: Receiver<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + 'static,
 {
@@ -130,11 +153,19 @@ async fn serve_incoming_connection<S>(
         handle_client(req, context)
     });
 
-    if let Err(err) = auto::Builder::new(TokioExecutor::new())
-        .serve_connection(TokioIo::new(stream), service)
-        .await
-    {
-        tracing::error!("Error serving connection: {err}");
+    let builder = auto::Builder::new(TokioExecutor::new());
+    let conn = builder.serve_connection(TokioIo::new(stream), service);
+    tokio::pin!(conn);
+
+    tokio::select! {
+        res = conn.as_mut() => {
+            if let Err(err) = res {
+                tracing::error!("Error serving connection: {err}");
+            }
+        }
+        _ = shutdown_rx.changed() => {
+            conn.as_mut().graceful_shutdown();
+        }
     }
 }
 
@@ -144,24 +175,33 @@ async fn start_http_server(
     router: Arc<Router>,
     http_client: Arc<reqwest::Client>,
 ) {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     loop {
-        let (stream, addr) = listener.accept().await.unwrap();
-        tracing::info!("Connected with client {addr} over http");
+        tokio::select! {
+            Ok((stream, addr)) = listener.accept(), if !*shutdown_rx.borrow() => {
+                tracing::info!("Connected with client {addr} over http");
 
-        let middleware_registry = middleware_registry.clone();
-        let router = router.clone();
-        let http_client = http_client.clone();
-
-        tokio::spawn(async move {
-            serve_incoming_connection(
-                stream,
-                middleware_registry.clone(),
-                router.clone(),
-                addr,
-                http_client.clone(),
-            )
-            .await;
-        });
+                let shutdown_rx = shutdown_rx.clone();
+                let middleware_registry = middleware_registry.clone();
+                let router = router.clone();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    serve_incoming_connection(
+                        stream,
+                        middleware_registry,
+                        router,
+                        addr,
+                        http_client,
+                        shutdown_rx,
+                    )
+                    .await;
+                });
+            },
+            _ = shutdown_signal() => {
+                initiate_shutdown(shutdown_tx).await;
+                break;
+            }
+        }
     }
 }
 
@@ -192,33 +232,42 @@ async fn start_https_server(
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
 
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     loop {
-        let (stream, addr) = listener.accept().await.unwrap();
-        let tls_acceptor = tls_acceptor.clone();
+        tokio::select! {
+            Ok((stream, addr)) = listener.accept(), if !*shutdown_rx.borrow() => {
+                let tls_acceptor = tls_acceptor.clone();
+                let middleware_registry = middleware_registry.clone();
+                let router = router.clone();
+                let http_client = http_client.clone();
+                let shutdown_rx = shutdown_rx.clone();
 
-        let middleware_registry = middleware_registry.clone();
-        let router = router.clone();
-        let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let tls_stream = match tls_acceptor.accept(stream).await {
+                        Ok(tls_stream) => tls_stream,
+                        Err(err) => {
+                            tracing::error!("Failed to perform tls handshake: {err}");
+                            return;
+                        }
+                    };
+                    tracing::info!("Connected with client {addr} over https");
 
-        tokio::spawn(async move {
-            let tls_stream = match tls_acceptor.accept(stream).await {
-                Ok(tls_stream) => tls_stream,
-                Err(err) => {
-                    tracing::error!("Failed to perform tls handshake: {err}");
-                    return;
-                }
-            };
-            tracing::info!("Connected with client {addr} over https");
-
-            serve_incoming_connection(
-                tls_stream,
-                middleware_registry.clone(),
-                router.clone(),
-                addr,
-                http_client.clone(),
-            )
-            .await;
-        });
+                    serve_incoming_connection(
+                        tls_stream,
+                        middleware_registry,
+                        router,
+                        addr,
+                        http_client,
+                        shutdown_rx,
+                    )
+                    .await;
+                });
+            }
+            _ = shutdown_signal() => {
+                initiate_shutdown(shutdown_tx).await;
+                break;
+            }
+        }
     }
 }
 
