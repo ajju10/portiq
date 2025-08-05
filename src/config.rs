@@ -17,9 +17,14 @@ pub enum Protocol {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct AddPrefixConfig {
+    pub prefix: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub enum MiddlewareConfig {
-    #[serde(rename = "request_id")]
-    RequestId,
+    #[serde(rename = "add_prefix")]
+    AddPrefix(AddPrefixConfig),
 }
 
 #[derive(Debug, Deserialize)]

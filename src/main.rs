@@ -251,7 +251,8 @@ fn send_upstream(
     http_client: Arc<reqwest::Client>,
 ) -> HandlerFunc {
     Arc::new(move |req: Request<RequestBody>| {
-        let url = upstream_url.clone();
+        let url = format!("{upstream_url}{}", req.uri());
+
         let host = if let Some(val) = req.headers().get("host") {
             String::from(val.to_str().unwrap())
         } else {
@@ -330,7 +331,6 @@ async fn handle_client(
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
     let original_request = request;
     let original_path = original_request.uri().path();
-    let original_query_params = original_request.uri().query();
     let original_method = original_request.method();
 
     let router = context.router;
@@ -338,15 +338,10 @@ async fn handle_client(
         Ok(route) => {
             if let Ok(upstream) = route.get_upstream() {
                 let route_middlewares = route.get_middlewares();
-                let mut proxy_uri_str =
-                    format!("{}{}", upstream.url, original_request.uri().path());
-                if let Some(params) = original_query_params {
-                    proxy_uri_str = format!("{proxy_uri_str}?{params}");
-                }
-
                 let middlewares = context.middleware_registry.create_chain(route_middlewares);
                 let handler =
-                    send_upstream(proxy_uri_str, context.ip_addr, context.http_client).clone();
+                    send_upstream(upstream.url.clone(), context.ip_addr, context.http_client)
+                        .clone();
                 let next = Next::new(handler, &middlewares);
                 let (parts, body) = original_request.into_parts();
                 let request = Request::from_parts(parts, RequestBody::new(body));
@@ -373,7 +368,6 @@ async fn handle_client(
             Ok(response_with_status(err.status_code()))
         }
     }
-
 }
 
 async fn shutdown_signal() {
