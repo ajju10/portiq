@@ -1,13 +1,24 @@
-use crate::config::{RouteConfig, Upstream};
+use crate::config::{MiddlewareConfig, RouteConfig, Upstream};
 use crate::error::RouterError;
 use crate::load_balancer::{LoadBalancer, WeightedRoundRobin};
 use matchit::Router as MatchItRouter;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-struct Route {
+pub struct Route {
     methods: HashSet<String>,
+    middlewares: Box<[MiddlewareConfig]>,
     lb: LoadBalancer,
+}
+
+impl Route {
+    pub fn get_upstream(&self) -> Result<&Upstream, RouterError> {
+        self.lb.get_next().ok_or(RouterError::NoUpstream)
+    }
+
+    pub fn get_middlewares(&self) -> &[MiddlewareConfig] {
+        &self.middlewares
+    }
 }
 
 pub struct Router {
@@ -22,6 +33,11 @@ impl Router {
             let lb = LoadBalancer::new(strategy);
             let route = Arc::new(Route {
                 methods: rc.methods.into_iter().collect(),
+                middlewares: rc
+                    .middlewares
+                    .as_ref()
+                    .map_or_else(Vec::new, |middleware_config| middleware_config.clone())
+                    .into_boxed_slice(),
                 lb,
             });
 
@@ -40,11 +56,10 @@ impl Router {
         Router { inner }
     }
 
-    pub fn match_route(&self, path: &str, method: &str) -> Result<Upstream, RouterError> {
+    pub fn get_route(&self, path: &str, method: &str) -> Result<Arc<Route>, RouterError> {
         let matched = self.inner.at(path).map_err(|_| RouterError::NotFound)?;
         if matched.value.methods.is_empty() || matched.value.methods.contains(method) {
-            let upstream = matched.value.lb.get_next().ok_or(RouterError::NoUpstream)?;
-            Ok(upstream.clone())
+            Ok(matched.value.clone())
         } else {
             Err(RouterError::MethodNotAllowed)
         }
@@ -64,6 +79,7 @@ mod tests {
                     url: "http://localhost:5000".to_string(),
                     weight: 1,
                 }],
+                middlewares: None,
             },
             RouteConfig {
                 path: "/api/health".to_string(),
@@ -72,6 +88,7 @@ mod tests {
                     url: "http://localhost:5001".to_string(),
                     weight: 1,
                 }],
+                middlewares: None,
             },
         ])
     }
@@ -79,15 +96,19 @@ mod tests {
     #[test]
     fn test_route_matches_correct_path_and_method() {
         let router = build_router();
-        let result = router.match_route("/api/test", "POST");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().url, "http://localhost:5000");
+        let route_result = router
+            .get_route("/api/test", "POST")
+            .expect("Router should match path: /api/test and method: POST");
+        let upstream = route_result
+            .get_upstream()
+            .expect("Route should return upstream");
+        assert_eq!(upstream.url, "http://localhost:5000");
     }
 
     #[test]
     fn test_route_rejects_wrong_method() {
         let router = build_router();
-        let result = router.match_route("/api/test", "PUT");
+        let result = router.get_route("/api/test", "PUT");
         assert!(matches!(result, Err(RouterError::MethodNotAllowed)));
     }
 
@@ -95,16 +116,18 @@ mod tests {
     fn test_route_accepts_any_method_if_none_specified() {
         let router = build_router();
         for method in &["GET", "POST", "PUT", "DELETE"] {
-            let result = router.match_route("/api/health", method);
-            assert!(result.is_ok(), "Route should accept method {}", method);
-            assert_eq!(result.unwrap().url, "http://localhost:5001");
+            let route = router
+                .get_route("/api/health", method)
+                .expect(&format!("Route should accept method {}", method));
+            let upstream = route.get_upstream().expect("Route should return upstream");
+            assert_eq!(upstream.url, "http://localhost:5001");
         }
     }
 
     #[test]
     fn test_route_not_found() {
         let router = build_router();
-        let result = router.match_route("/nonexistent", "GET");
+        let result = router.get_route("/nonexistent", "GET");
         assert!(matches!(result, Err(RouterError::NotFound)));
     }
 
@@ -112,21 +135,29 @@ mod tests {
     fn test_multiple_routes_distinct_paths() {
         let router = build_router();
 
-        let test_result = router.match_route("/api/test", "GET");
-        assert!(test_result.is_ok());
-        assert_eq!(test_result.unwrap().url, "http://localhost:5000");
+        let test_result = router
+            .get_route("/api/test", "GET")
+            .expect("Router should match path: /api/test and method: GET");
+        let upstream = test_result
+            .get_upstream()
+            .expect("Route should return upstream");
+        assert_eq!(upstream.url, "http://localhost:5000");
 
-        let health_result = router.match_route("/api/health", "POST");
-        assert!(health_result.is_ok());
-        assert_eq!(health_result.unwrap().url, "http://localhost:5001");
+        let health_result = router
+            .get_route("/api/health", "POST")
+            .expect("Router should match path: /api/health and method: POST");
+        let upstream = health_result
+            .get_upstream()
+            .expect("Route should return upstream");
+        assert_eq!(upstream.url, "http://localhost:5001");
     }
 
     #[test]
     fn test_prefix_path_matches() {
         let router = build_router();
-        let exact_match = router.match_route("/api/test", "GET");
-        let trailing_slash_match = router.match_route("/api/test/", "GET");
-        let wildcard_match = router.match_route("/api/test/new", "GET");
+        let exact_match = router.get_route("/api/test", "GET");
+        let trailing_slash_match = router.get_route("/api/test/", "GET");
+        let wildcard_match = router.get_route("/api/test/new", "GET");
 
         assert!(exact_match.is_ok(), "Expected exact match to succeed");
         assert!(

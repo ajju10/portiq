@@ -2,6 +2,7 @@ use crate::middleware::Result;
 use crate::middleware::registry::MiddlewareFactory;
 use crate::middleware::{Middleware, Next, REQUEST_ID_HEADER, RequestBody, ResponseBody};
 use async_trait::async_trait;
+use config::Value;
 use hyper::header::USER_AGENT;
 use hyper::{Request, Response};
 use std::net::{IpAddr, Ipv4Addr};
@@ -69,7 +70,7 @@ impl Middleware for AccessLogger {
 }
 
 impl MiddlewareFactory for AccessLogger {
-    fn create(&self) -> Arc<dyn Middleware> {
+    fn create(&self, _config: Option<Value>) -> Arc<dyn Middleware> {
         Arc::new(AccessLogger)
     }
 }

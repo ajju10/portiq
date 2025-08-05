@@ -1,13 +1,13 @@
 use crate::config::{GatewayConfig, Protocol};
 use crate::error::RouterError;
-use crate::middleware::registry::{MiddlewareFactory, MiddlewareRegistry};
-use crate::middleware::{AccessLogger, HandlerFunc, Next, RequestBody, RequestID};
+use crate::middleware::registry::MiddlewareRegistry;
+use crate::middleware::{HandlerFunc, Next, RequestBody};
 use crate::router::Router;
 use crate::utils::{bad_gateway_response, load_certs, load_private_key, response_with_status};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
-use hyper::{HeaderMap, Method, Request, Response};
+use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use reqwest::RequestBuilder;
@@ -60,26 +60,6 @@ impl RouterContext {
     }
 }
 
-async fn shutdown_signal() {
-    let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT");
-    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to install SIGTERM");
-    tokio::select! {
-        _ = sigint.recv() => {
-            tracing::info!("Received SIGINT");
-        }
-        _ = sigterm.recv() => {
-            tracing::info!("Received SIGTERM");
-        }
-    }
-}
-
-async fn initiate_shutdown(shutdown_tx: Sender<bool>) {
-    tracing::info!("Shutdown initiated. No longer accepting connections");
-    tracing::info!("Server will stop after 5 seconds");
-    shutdown_tx.send(true).unwrap();
-    tokio::time::sleep(Duration::from_secs(5)).await;
-}
-
 #[tokio::main]
 async fn main() {
     let args = env::args().collect::<Vec<_>>();
@@ -102,13 +82,7 @@ async fn main() {
         .build()
         .expect("Invalid tls config");
 
-    let middlewares: Vec<(&str, Box<dyn MiddlewareFactory>)> = vec![
-        ("request_id", Box::new(RequestID)),
-        ("access_logger", Box::new(AccessLogger)),
-    ];
-    let mut middleware_registry = MiddlewareRegistry::new();
-    middleware_registry.register_all(middlewares);
-    let middleware_registry = Arc::new(middleware_registry);
+    let middleware_registry = Arc::new(MiddlewareRegistry::init());
 
     let ip_addr = IpAddr::from_str(&gateway_config.server.host).expect("Host must be valid");
     let server_addr = SocketAddr::from((ip_addr, gateway_config.server.port));
@@ -360,24 +334,29 @@ async fn handle_client(
     let original_method = original_request.method();
 
     let router = context.router;
-    match router.match_route(original_path, original_method.as_str()) {
-        Ok(upstream) => {
-            let mut proxy_uri_str = format!("{}{}", upstream.url, original_request.uri().path());
-            if let Some(params) = original_query_params {
-                proxy_uri_str = format!("{proxy_uri_str}?{params}");
+    match router.get_route(original_path, original_method.as_str()) {
+        Ok(route) => {
+            if let Ok(upstream) = route.get_upstream() {
+                let route_middlewares = route.get_middlewares();
+                let mut proxy_uri_str =
+                    format!("{}{}", upstream.url, original_request.uri().path());
+                if let Some(params) = original_query_params {
+                    proxy_uri_str = format!("{proxy_uri_str}?{params}");
+                }
+
+                let middlewares = context.middleware_registry.create_chain(route_middlewares);
+                let handler =
+                    send_upstream(proxy_uri_str, context.ip_addr, context.http_client).clone();
+                let next = Next::new(handler, &middlewares);
+                let (parts, body) = original_request.into_parts();
+                let request = Request::from_parts(parts, RequestBody::new(body));
+                next.run(request).await
+            } else {
+                tracing::warn!(
+                    "Router error: No upstream available to handle request for path {original_path}"
+                );
+                Ok(response_with_status(StatusCode::SERVICE_UNAVAILABLE))
             }
-
-            let global_middlewares = ["request_id", "access_logger"];
-            let middlewares = context
-                .middleware_registry
-                .create_chain(&global_middlewares);
-
-            let handler =
-                send_upstream(proxy_uri_str, context.ip_addr, context.http_client).clone();
-            let next = Next::new(handler, &middlewares);
-            let (parts, body) = original_request.into_parts();
-            let request = Request::from_parts(parts, RequestBody::new(body));
-            next.run(request).await
         }
         Err(err) => {
             match err {
@@ -387,11 +366,32 @@ async fn handle_client(
                 RouterError::MethodNotAllowed => tracing::warn!(
                     "Router error: Method {original_method} not allowed for path {original_path}"
                 ),
-                RouterError::NoUpstream => tracing::warn!(
-                    "Router error: No upstream available to handle request for path {original_path}"
-                ),
+                RouterError::NoUpstream => {
+                    unreachable!("get_route should never return NoUpstream error")
+                }
             }
             Ok(response_with_status(err.status_code()))
         }
     }
+
+}
+
+async fn shutdown_signal() {
+    let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT");
+    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to install SIGTERM");
+    tokio::select! {
+        _ = sigint.recv() => {
+            tracing::info!("Received SIGINT");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("Received SIGTERM");
+        }
+    }
+}
+
+async fn initiate_shutdown(shutdown_tx: Sender<bool>) {
+    tracing::info!("Shutdown initiated. No longer accepting connections");
+    tracing::info!("Server will stop after 5 seconds");
+    shutdown_tx.send(true).unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
 }

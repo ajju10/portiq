@@ -14,6 +14,8 @@ mod access_logger;
 
 pub mod registry;
 
+mod constants;
+
 mod request_id;
 
 pub use access_logger::AccessLogger;
