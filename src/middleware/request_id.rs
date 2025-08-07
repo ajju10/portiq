@@ -1,3 +1,4 @@
+use crate::config::MiddlewareConfig;
 use crate::middleware::Result;
 use crate::middleware::registry::MiddlewareFactory;
 use crate::middleware::{Middleware, Next, REQUEST_ID_HEADER, RequestBody, ResponseBody};
@@ -29,7 +30,7 @@ impl Middleware for RequestID {
 }
 
 impl MiddlewareFactory for RequestID {
-    fn create(&self) -> Arc<dyn Middleware> {
+    fn create(&self, _config: Option<MiddlewareConfig>) -> Arc<dyn Middleware> {
         Arc::new(RequestID)
     }
 }

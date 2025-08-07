@@ -16,6 +16,17 @@ pub enum Protocol {
     Https,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddPrefixConfig {
+    pub prefix: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum MiddlewareConfig {
+    #[serde(rename = "add_prefix")]
+    AddPrefix(AddPrefixConfig),
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
@@ -50,6 +61,7 @@ pub struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
     pub upstream: Vec<Upstream>,
+    pub middlewares: Option<Vec<MiddlewareConfig>>,
 }
 
 #[derive(Debug, Deserialize)]
