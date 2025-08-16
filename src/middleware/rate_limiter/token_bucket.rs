@@ -30,7 +30,6 @@ impl TokenBucket {
 
     fn allow(&mut self) -> bool {
         self.refill();
-
         if self.available_tokens >= 1.0 {
             self.available_tokens -= 1.0;
             true
@@ -89,13 +88,12 @@ impl RateLimiter for TokenBucketRateLimiter {
             let refill_rate = self.limit as f64 / self.duration.as_secs_f64();
             TokenBucket::new(capacity, refill_rate)
         });
-
         bucket.allow()
     }
 
     fn retry_after(&self, key: &str) -> Option<Duration> {
-        let mut store = self.store.lock().unwrap();
-        if let Some(bucket) = store.get_mut(key) {
+        let store = self.store.lock().unwrap();
+        if let Some(bucket) = store.get(key) {
             if bucket.available_tokens >= 1.0 {
                 Some(Duration::from_secs(0))
             } else {

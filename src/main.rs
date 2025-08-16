@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 use crate::config::{GatewayConfig, Protocol};
 use crate::error::RouterError;
 use crate::middleware::registry::MiddlewareRegistry;
