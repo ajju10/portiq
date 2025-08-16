@@ -95,7 +95,7 @@ impl RateLimiter for TokenBucketRateLimiter {
         let store = self.store.lock().unwrap();
         if let Some(bucket) = store.get(key) {
             if bucket.available_tokens >= 1.0 {
-                Some(Duration::from_secs(0))
+                None
             } else {
                 let tokens_needed = 1.0 - bucket.available_tokens;
                 let seconds_to_wait = (tokens_needed / bucket.refill_rate).ceil() as u64;
