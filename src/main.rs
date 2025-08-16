@@ -251,7 +251,10 @@ fn send_upstream(
     http_client: Arc<reqwest::Client>,
 ) -> HandlerFunc {
     Arc::new(move |req: Request<RequestBody>| {
-        let url = format!("{upstream_url}{}", req.uri());
+        let url = format!(
+            "{upstream_url}{}",
+            req.uri().path_and_query().unwrap().as_str()
+        );
 
         let host = if let Some(val) = req.headers().get("host") {
             String::from(val.to_str().unwrap())
@@ -292,7 +295,10 @@ fn send_upstream(
                         .unwrap();
                     Ok(response)
                 }
-                Err(_) => Ok(bad_gateway_response()),
+                Err(err) => {
+                    tracing::error!("Error sending request to upstream: {err:?}");
+                    Ok(bad_gateway_response())
+                }
             }
         })
     })

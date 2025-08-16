@@ -18,10 +18,13 @@ mod constants;
 
 mod add_prefix;
 
+mod rate_limiter;
+
 mod request_id;
 
 pub use access_logger::AccessLogger;
 pub use add_prefix::AddPrefixFactory;
+pub use rate_limiter::RateLimiterFactory;
 pub use request_id::RequestID;
 
 type Result<T> = std::result::Result<T, Infallible>;

@@ -1,8 +1,10 @@
 use crate::config::MiddlewareConfig;
 use crate::middleware::constants::{
-    ACCESS_LOGGER_MIDDLEWARE, ADD_PREFIX_MIDDLEWARE, REQUEST_ID_MIDDLEWARE,
+    ACCESS_LOGGER_MIDDLEWARE, ADD_PREFIX_MIDDLEWARE, RATE_LIMIT_MIDDLEWARE, REQUEST_ID_MIDDLEWARE,
 };
-use crate::middleware::{AccessLogger, AddPrefixFactory, Middleware, RequestID};
+use crate::middleware::{
+    AccessLogger, AddPrefixFactory, Middleware, RateLimiterFactory, RequestID,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -20,6 +22,7 @@ impl MiddlewareRegistry {
         factories.insert(REQUEST_ID_MIDDLEWARE, Box::new(RequestID));
         factories.insert(ACCESS_LOGGER_MIDDLEWARE, Box::new(AccessLogger));
         factories.insert(ADD_PREFIX_MIDDLEWARE, Box::new(AddPrefixFactory));
+        factories.insert(RATE_LIMIT_MIDDLEWARE, Box::new(RateLimiterFactory::new()));
 
         MiddlewareRegistry { factories }
     }
@@ -50,6 +53,10 @@ impl MiddlewareRegistry {
                     .factories
                     .get(ADD_PREFIX_MIDDLEWARE)
                     .map(|factory| factory.create(Some(MiddlewareConfig::AddPrefix(cfg.clone())))),
+                MiddlewareConfig::RateLimit(cfg) => self
+                    .factories
+                    .get(RATE_LIMIT_MIDDLEWARE)
+                    .map(|factory| factory.create(Some(MiddlewareConfig::RateLimit(cfg.clone())))),
             })
             .collect::<Vec<_>>();
 
