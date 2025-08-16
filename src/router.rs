@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct Route {
+    path: String,
     methods: HashSet<String>,
     middlewares: Box<[MiddlewareConfig]>,
     lb: LoadBalancer,
@@ -32,6 +33,7 @@ impl Router {
             let strategy = Box::new(WeightedRoundRobin::new(&rc.upstream));
             let lb = LoadBalancer::new(strategy);
             let route = Arc::new(Route {
+                path: rc.path,
                 methods: rc.methods.into_iter().collect(),
                 middlewares: rc
                     .middlewares
@@ -42,15 +44,17 @@ impl Router {
             });
 
             // Exact match like /api/v1
-            inner.insert(rc.path.as_str(), route.clone()).unwrap();
+            inner.insert(&route.path, route.clone()).unwrap();
 
             // Trailing slash match like /api/v1/
             inner
-                .insert(format!("{}/", rc.path.as_str()), route.clone())
+                .insert(format!("{}/", route.path), route.clone())
                 .unwrap();
 
             // Wildcard match like /api/v1/*
-            inner.insert(format!("{}/{{*p}}", rc.path), route).unwrap();
+            inner
+                .insert(format!("{}/{{*p}}", route.path), route)
+                .unwrap();
         }
 
         Router { inner }

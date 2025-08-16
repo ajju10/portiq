@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 pub enum LogFormat {
@@ -22,9 +23,27 @@ pub struct AddPrefixConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub enum RateLimitKeySource {
+    #[serde(rename = "ip")]
+    IP(Option<String>),
+    #[serde(rename = "request_header")]
+    RequestHeader(String),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    pub source: RateLimitKeySource,
+    pub limit: u32,
+    #[serde(with = "humantime_serde")]
+    pub period: Duration,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub enum MiddlewareConfig {
     #[serde(rename = "add_prefix")]
     AddPrefix(AddPrefixConfig),
+    #[serde(rename = "rate_limit")]
+    RateLimit(RateLimitConfig),
 }
 
 #[derive(Debug, Deserialize)]
