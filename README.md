@@ -1,11 +1,11 @@
-# Portiq: A simple HTTP(S) API Gateway in Rust
+# PortIQ: A simple HTTP(S) API Gateway in Rust
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust Version](https://img.shields.io/badge/rust-1.79%2B-orange.svg)](https://www.rust-lang.org/)
 
-**Portiq** is an HTTP(S) API gateway written in Rust, built using `hyper`, `rustls`, and `tokio`.
+**PortIQ** is an HTTP(S) API gateway written in Rust, built using `hyper`, `rustls`, and `tokio`.
 
-> **Note:** This project was built primarily for learning purposes to explore Rust for network programming.
+> **Note:** This project is built primarily for learning purposes to explore Rust for network programming.
 
 ## Features
 
@@ -23,7 +23,6 @@
 ### Prerequisites
 
 - **Rust Toolchain**: The Minimum Supported Rust Version (MSRV) is `1.79` or later. This is determined by the MSRV of its core dependencies (`tokio`, `hyper`, `rustls`).
-- **OpenSSL Development Libraries**
 - **Build Tools**: `rustls` uses `aws-lc-rs` as the default cryptography provider, which requires a C compiler (like GCC or Clang) and `cmake` to build. Please see the `aws-lc-rs` documentation for more details.
 
 ### 1. Build from Source
@@ -37,37 +36,40 @@ cd portiq
 cargo build --release
 ```
 
-### 2. Configure Portiq
+### 2. Configure PortIQ
 
-Create a `portiq.yml` file. Here's a sample configuration:
+Create a `portiq.yml` file. Here's a sample configuration, most of the fields can be omitted and default values will be picked:
 
 ```yaml
 server:
-  host: 127.0.0.1
-  port: 8000
-  protocol: http
+  host: 127.0.0.1 # default 127.0.0.1
+  port: 8000 # default 8000
+  protocol: http # default http
+  cert_file: <path_of_certificate.pem> # default None only required for https protocol
+  key_file: <path_of_certificate.pem> # default None only required for https protocol
 
 log:
-  level: INFO
-  format: common
-  file_path: stdout
+  level: INFO # (could be anything supported by `tracing`) default INFO
+  format: common # (common or json) default common
+  file_path: stdout # (could be either stdout, stderr or a file path) default stdout
 
+# format and file_path have same options as log
 access_log:
-  enabled: true
+  enabled: true # (default true)
   format: common
   file_path: stdout
 
 routes:
   - path: /api/users
-    methods: [GET, POST]
+    methods: [GET, POST] # default [] (allow all methods)
     upstream:
       - url: http://localhost:5000
-        weight: 2
+        weight: 2 # can be omitted, default is 1
       - url: http://localhost:5001
         weight: 1
 ```
 
-### 3. Run Portiq
+### 3. Run PortIQ
 
 ```bash
 ./target/release/portiq portiq.yml
@@ -75,16 +77,16 @@ routes:
 
 ## Usage
 
-Once Portiq is running, you can send requests to it, and it will route them to the appropriate upstream service.
+Once PortIQ is running, you can send requests to it, and it will route them to the appropriate upstream service.
 
 **Example:**
 
 ```bash
-# Assuming Portiq is running on localhost:8000
+# Assuming PortIQ is running on localhost:8000
 curl http://localhost:8000/api/users
 ```
 
-This request will be forwarded to either `http://localhost:5000` or `http://localhost:5001` based on the WRR load balancing.
+This request will be distributed between `http://localhost:5000` and `http://localhost:5001` based on weights.
 
 ## Configuration Options
 
@@ -120,7 +122,7 @@ Feedback and contributions to these or any other features are highly welcome.
 
 ## Contributing
 
-This project is a work in progress and was built primarily for learning purposes. I welcome any and all feedback, suggestions, and contributions! If you have any ideas for improvement or have found a bug, please feel free to open an issue or submit a pull request.
+This project is a work in progress and was built primarily for learning purposes. I welcome any and all feedback, suggestions, and contributions! If you have any ideas for improvement, please feel free to open an issue or submit a pull request.
 
 ## License
 
