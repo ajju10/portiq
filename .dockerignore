@@ -1,0 +1,13 @@
+target
+
+.vscode
+.idea
+.github
+
+README.md
+LICENSE
+
+*.log
+*.svg
+*.yml
+*.pem
