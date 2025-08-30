@@ -17,7 +17,7 @@ rustls-pki-types = "1.12.0"
 rustls = "0.23.31"
 tokio-rustls = "0.26.2"
 async-trait = "0.1.88"
-reqwest = { version = "0.12.22", features = ["rustls-tls"] }
+reqwest = { version = "0.12.22", default-features = false, features = ["rustls-tls"] }
 config = { version = "0.15.13", default-features = false, features = ["yaml"] }
 thiserror = "2.0.12"
 matchit = "0.8.6"
