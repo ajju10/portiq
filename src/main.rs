@@ -39,7 +39,7 @@ static MIDDLEWARE_REGISTRY: LazyLock<MiddlewareRegistry> = LazyLock::new(Middlew
 
 async fn graceful_shutdown(cancel_token: CancellationToken) {
     cancel_token.cancel();
-    tracing::info!("Initiating graceful shutdown application will exit after 5 seconds");
+    tracing::info!("Initiating shutdown, application will exit after 5 seconds");
     tokio::time::sleep(Duration::from_secs(5)).await;
 }
 
@@ -72,7 +72,7 @@ async fn main() {
 
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    logger::init(&gateway_config.log, &gateway_config.access_log);
+    let _ = logger::init_layers(&gateway_config.log, &gateway_config.access_log);
 
     let tls_acceptor = gateway_config.tls.as_ref().map(|tls_config| {
         let rustls_server_config = server::init_rustls_server_config(tls_config);

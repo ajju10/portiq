@@ -24,6 +24,7 @@ thiserror = "2.0.16"
 humantime-serde = "1.1.1"
 tokio-util = "0.7.16"
 futures = { version = "0.3.31", default-features = false }
+tracing-appender = "0.2.3"
 
 [profile.release]
 codegen-units = 1
