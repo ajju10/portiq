@@ -3,9 +3,11 @@ target
 .vscode
 .idea
 .github
+.git
 
 README.md
 LICENSE
+.gitignore
 
 *.log
 *.svg

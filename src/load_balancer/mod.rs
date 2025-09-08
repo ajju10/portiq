@@ -75,11 +75,11 @@ mod tests {
     fn test_weight_distribution() {
         let upstreams = vec![
             Upstream {
-                url: "server1".to_string(),
+                target: "server1".to_string(),
                 weight: 3,
             },
             Upstream {
-                url: "server2".to_string(),
+                target: "server2".to_string(),
                 weight: 1,
             },
         ];
@@ -88,7 +88,7 @@ mod tests {
         let mut counts = HashMap::new();
         for _ in 0..1000 {
             if let Some(upstream) = lb.select() {
-                *counts.entry(upstream.url.clone()).or_insert(0) += 1;
+                *counts.entry(upstream.target.clone()).or_insert(0) += 1;
             }
         }
 
@@ -101,11 +101,11 @@ mod tests {
     fn test_round_robin_cycle() {
         let upstreams = vec![
             Upstream {
-                url: "server1".to_string(),
+                target: "server1".to_string(),
                 weight: 1,
             },
             Upstream {
-                url: "server2".to_string(),
+                target: "server2".to_string(),
                 weight: 1,
             },
         ];
@@ -115,9 +115,9 @@ mod tests {
         let server2 = lb.select().unwrap();
         let server3 = lb.select().unwrap();
 
-        assert_eq!(server1.url, upstreams[0].url);
-        assert_eq!(server2.url, upstreams[1].url);
-        assert_eq!(server3.url, upstreams[0].url);
+        assert_eq!(server1.target, upstreams[0].target);
+        assert_eq!(server2.target, upstreams[1].target);
+        assert_eq!(server3.target, upstreams[0].target);
     }
 
     #[test]
@@ -131,11 +131,11 @@ mod tests {
     fn test_zero_weight_returns_none() {
         let upstreams = vec![
             Upstream {
-                url: "server1".to_string(),
+                target: "server1".to_string(),
                 weight: 0,
             },
             Upstream {
-                url: "server2".to_string(),
+                target: "server2".to_string(),
                 weight: 0,
             },
         ];

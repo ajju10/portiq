@@ -27,7 +27,7 @@ impl MiddlewareRegistry {
         MiddlewareRegistry { factories }
     }
 
-    pub fn create_chain(&self, middlewares: &[MiddlewareConfig]) -> Vec<Arc<dyn Middleware>> {
+    pub fn create_chain(&self, middlewares: &[&MiddlewareConfig]) -> Vec<Arc<dyn Middleware>> {
         let mut route_middlewares = vec![];
 
         if let Some(request_id_middleware) = self
