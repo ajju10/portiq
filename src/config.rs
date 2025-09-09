@@ -27,7 +27,7 @@ impl GatewayConfig {
         // Check if a default tls config is provided (if at all)
         if let Some(tls_config) = &self.tls {
             let count = tls_config.iter().filter(|cfg| cfg.default).count();
-            if count != 0 {
+            if count != 1 {
                 return Err(format!(
                     "Exactly one TLS config must be marked as default, found {count}",
                 ));
