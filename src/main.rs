@@ -72,7 +72,7 @@ async fn main() {
 
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let _ = logger::init_layers(&gateway_config.log, &gateway_config.access_log);
+    let _guard = logger::init_layers(&gateway_config.log, &gateway_config.access_log);
 
     let tls_acceptor = gateway_config.tls.as_ref().map(|tls_config| {
         let rustls_server_config = server::init_rustls_server_config(tls_config);
