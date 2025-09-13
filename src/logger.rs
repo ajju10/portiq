@@ -16,7 +16,7 @@ pub fn init_layers(
     let (gateway_writer, gateway_guard) = get_log_writer(gateway_log_config.file_path.as_str());
     let writer_layer = fmt::layer().with_writer(gateway_writer);
     let formatted_layer = match gateway_log_config.format {
-        LogFormat::Common => writer_layer.compact().boxed(),
+        LogFormat::Compact => writer_layer.compact().boxed(),
         LogFormat::Json => writer_layer.json().boxed(),
     };
     let gateway_layer = formatted_layer
@@ -30,7 +30,7 @@ pub fn init_layers(
         let (access_writer, access_guard) = get_log_writer(access_log_config.file_path.as_str());
         let writer_layer = fmt::layer().with_writer(access_writer);
         let formatted_layer = match access_log_config.format {
-            LogFormat::Common => writer_layer.compact().boxed(),
+            LogFormat::Compact => writer_layer.compact().boxed(),
             LogFormat::Json => writer_layer.json().boxed(),
         };
         let access_layer = formatted_layer

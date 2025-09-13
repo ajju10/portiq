@@ -1,3 +1,4 @@
+use crate::SharedGatewayState;
 use crate::config::{GatewayConfig, Upstream};
 use crate::error::RouterError;
 use crate::service::ServiceRegistry;
@@ -27,7 +28,6 @@ pub struct Router {
     svc_registry: Arc<ServiceRegistry>,
 }
 
-/// Router for new setup, the routing logic should be added now
 impl Router {
     pub fn new(gateway_config: Arc<GatewayConfig>, svc_registry: Arc<ServiceRegistry>) -> Self {
         let mut http_routes = Vec::with_capacity(gateway_config.http.routes.len());
@@ -103,7 +103,6 @@ impl Router {
                 return true;
             }
         }
-
         false
     }
 
@@ -127,27 +126,24 @@ impl Router {
 }
 
 pub struct RouterContext {
-    pub(crate) router: Arc<Router>,
     pub(crate) ip_addr: IpAddr,
     pub(crate) listener: String,
     pub(crate) http_client: Arc<reqwest::Client>,
-    pub(crate) gateway_config: Arc<GatewayConfig>,
+    pub(crate) gateway_state: SharedGatewayState,
 }
 
 impl RouterContext {
     pub(crate) fn new(
-        router: Arc<Router>,
         ip_addr: IpAddr,
         listener: String,
         http_client: Arc<reqwest::Client>,
-        gateway_config: Arc<GatewayConfig>,
+        gateway_state: SharedGatewayState,
     ) -> Self {
         RouterContext {
-            router,
             ip_addr,
             listener,
             http_client,
-            gateway_config,
+            gateway_state,
         }
     }
 }
