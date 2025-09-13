@@ -1,14 +1,19 @@
+use crate::gateway_runtime::GatewayRuntime;
+use crate::{CONFIG_FILE_PATH, SharedGatewayState};
 use config::{Config, File};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default = "default_config_version")]
     pub version: u8,
+    #[serde(default)]
+    pub admin_api: AdminAPIConfig,
     #[serde(default)]
     pub log: GatewayLog,
     #[serde(default)]
@@ -89,7 +94,20 @@ impl GatewayConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminAPIConfig {
+    pub addr: SocketAddr,
+}
+
+impl Default for AdminAPIConfig {
+    fn default() -> Self {
+        AdminAPIConfig {
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5678),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TLSConfig {
     pub cert_file: PathBuf,
     pub key_file: PathBuf,
@@ -98,7 +116,7 @@ pub struct TLSConfig {
     pub hostnames: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Listener {
     pub name: String,
     pub addr: SocketAddr,
@@ -106,7 +124,7 @@ pub struct Listener {
     pub protocol: Protocol,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpConfig {
     #[serde(default)]
     pub middlewares: HashMap<String, MiddlewareConfig>,
@@ -114,12 +132,12 @@ pub struct HttpConfig {
     pub routes: Vec<RouteConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpServiceConfig {
     pub upstreams: Vec<Upstream>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteConfig {
     pub hosts: Option<Vec<String>>,
     pub path: Option<String>,
@@ -128,15 +146,15 @@ pub struct RouteConfig {
     pub middlewares: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
     #[default]
-    Common,
+    Compact,
     Json,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
     #[default]
@@ -144,14 +162,15 @@ pub enum Protocol {
     Https,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddPrefixConfig {
     pub prefix: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RateLimitKeySource {
+    #[serde(rename = "ip")]
     IP(Option<String>),
     RequestHeader(String),
 }
@@ -162,7 +181,7 @@ impl Default for RateLimitKeySource {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
     #[serde(default)]
     pub source: RateLimitKeySource,
@@ -171,14 +190,14 @@ pub struct RateLimitConfig {
     pub period: Duration,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MiddlewareConfig {
     AddPrefix(AddPrefixConfig),
     RateLimit(RateLimitConfig),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct GatewayLog {
     #[serde(default = "default_log_level")]
@@ -199,7 +218,7 @@ impl Default for GatewayLog {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccessLog {
     #[serde(default = "default_access_log_enabled")]
     pub enabled: bool,
@@ -219,7 +238,7 @@ impl Default for AccessLog {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Upstream {
     pub target: String,
     #[serde(default = "default_upstream_weight")]
@@ -246,7 +265,9 @@ fn default_config_version() -> u8 {
     1
 }
 
-pub fn load_config(file_path: &str) -> Result<GatewayConfig, String> {
+pub fn load_config() -> Result<GatewayConfig, String> {
+    let file_path = CONFIG_FILE_PATH.get().ok_or("Config file path not found")?;
+
     let cfg = Config::builder()
         .add_source(File::with_name(file_path))
         .build()
@@ -255,4 +276,34 @@ pub fn load_config(file_path: &str) -> Result<GatewayConfig, String> {
         .map_err(|err| err.to_string())?;
 
     cfg.validate().map_or_else(Err, |_| Ok(cfg))
+}
+
+pub fn reload_config(current_state: SharedGatewayState) -> Result<(), String> {
+    let cfg = load_config()?;
+    {
+        let current_state = current_state.load();
+        // perform validations for non-reloadable values, currently reject if anything changes
+        if !static_config_same(current_state.get_last_applied_config(), &cfg) {
+            tracing::warn!("Start part of config changed, using previous config");
+            return Err(String::from(
+                "Static fields of config has changed, config not applied",
+            ));
+        }
+    }
+
+    // Build new gateway runtime and swap
+    let new_config = Arc::new(cfg);
+    let new_runtime = GatewayRuntime::new(new_config);
+    current_state.store(Arc::new(new_runtime));
+
+    Ok(())
+}
+
+fn static_config_same(previous: &GatewayConfig, new: &GatewayConfig) -> bool {
+    previous.version == new.version
+        && previous.admin_api == new.admin_api
+        && previous.log == new.log
+        && previous.access_log == new.access_log
+        && previous.tls == new.tls
+        && previous.listeners == new.listeners
 }
