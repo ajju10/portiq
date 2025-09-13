@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**PortIQ** is an HTTP(S) API gateway written in Rust, built using `hyper`, `rustls`, and `tokio`.
+**PortIQ** is an HTTP(S) API gateway written in Rust, built using `hyper`, `reqwest`, `rustls`, and `tokio`.
 
 > **Note:** This project is built primarily for learning purposes to explore Rust for network programming.
 
@@ -13,13 +13,23 @@
 - **Path-based Routing**: Route requests to different upstream services based on the URL path.
 - **TLS Termination**: Offload TLS encryption/decryption from your backend services.
 - **Load Balancing**: In-memory Weighted Round Robin (WRR) for distributing traffic.
-- **Middleware**:
+- **Middlewares**: A configurable middleware chain for transforming request/response (design inspired by
+  `reqwest-middleware` crate). Currently, a few middlewares are implemented -
     - Request ID for tracking
     - Access logger for detailed request logs
-- **Static Configuration**: Configure everything through a single `portiq.yml` file.
+    - Request prefix to rewrite url before sending upstream
+    - Token Bucket in memory rate limiter
+- **Yaml Configuration**: Configure everything through a single `portiq.yml` file.
 - **Config Validation**: Basic validation for configuration, such as ensuring one default TLS certificate, no duplicate
   listeners, no undefined services, etc.
+- **Dynamic Config Reload**: Dynamic reload via REST API /api/v1/reload. Currently only the section under http can be
+  reloaded (middlewares, services, routes). Once the file is updated hit /api/v1/reload endpoint to signal reload. Maybe
+  a file watcher can also be added later.
 - **Logging**: Structured and configurable logging for better monitoring.
+- **API Server**: A minimal REST API to allow dynamic updates to configuration. Currently, it's very minimal just the
+  below endpoints:
+    - **GET /api/v1**: Returns currently applied config and some metadata.
+    - **POST /api/v1/reload**: Signal server to re-read the config file and apply the config without restart.
 
 ## Getting Started
 
@@ -49,15 +59,19 @@ picked:
 ```yaml
 version: 1 # currently only allowed value is `1`, can be omitted
 
+# Exposes a minimal admin API, can be omitted
+admin_api:
+  addr: 127.0.0.1:5678 # default
+
 log:
   level: INFO # (could be anything supported by `tracing`) default INFO
-  format: common # (common or json) default common
+  format: compact # (compact or json) default compact
   file_path: stdout # (could be either stdout or a file path) default stdout
 
 # format and file_path have same options as log
 access_log:
   enabled: true # (default true)
-  format: common
+  format: compact
   file_path: stdout
 
 tls: # List of certificates to use, only one must be marked as default, can be omitted if running http only
@@ -108,7 +122,7 @@ http:
 ### 3. Run PortIQ
 
 ```bash
-./target/release/portiq portiq.yml
+./target/release/portiq --config portiq.yml
 ```
 
 ## Usage
@@ -127,32 +141,33 @@ This request will be distributed between `https://user.service1:4443` and `https
 
 ## Configuration Options
 
-| Section         | Key           | Description                                    |
-|-----------------|---------------|------------------------------------------------|
-| **version**     | `version`     | Configuration version (currently 1).           |
-| **listeners**   | `name`        | Name of the listener.                          |
-|                 | `addr`        | Address and port to bind (e.g., 0.0.0.0:3000). |
-|                 | `protocol`    | `http` or `https`.                             |
-| **tls**         | `cert_file`   | Path to certificate .pem file.                 |
-|                 | `key_file`    | Path to private key .pem file.                 |
-|                 | `default`     | Whether this is the default certificate.       |
-|                 | `hostnames`   | List of hostnames for SNI routing.             |
-| **http**        | `http`        | Container for HTTP-related configuration.      |
-| **middlewares** | `middlewares` | HTTP middleware configurations.                |
-| **services**    | `upstreams`   | List of backend servers.                       |
-|                 | `target`      | URL of the backend server.                     |
-|                 | `weight`      | Weight for the WRR load balancer.              |
-| **routes**      | `hosts`       | List of hostnames to match.                    |
-|                 | `path`        | URL path to match.                             |
-|                 | `listeners`   | List of listeners this route applies to.       |
-|                 | `service`     | Name of the service to route to.               |
-|                 | `middlewares` | List of middleware to apply.                   |
-| **log**         | `level`       | `DEBUG`, `INFO`, `WARN`, `ERROR`.              |
-|                 | `format`      | `common` or `json`.                            |
-|                 | `file_path`   | `stdout` or a file path.                       |
-| **access_log**  | `enabled`     | `true` or `false`.                             |
-|                 | `format`      | `common` or `json`.                            |
-|                 | `file_path`   | `stdout` or a file path.                       |
+| Section         | Key           | Description                                     |
+|-----------------|---------------|-------------------------------------------------|
+| **version**     | `version`     | Configuration version (currently 1)             |
+| **admin_api**   | `addr`        | Address and port, default is `127.0.0.1:5678`   |
+| **log**         | `level`       | `DEBUG`, `INFO`, `WARN`, `ERROR`                |
+|                 | `format`      | `compact` or `json`                             |
+|                 | `file_path`   | `stdout` or a file path                         |
+| **access_log**  | `enabled`     | `true` or `false`                               |
+|                 | `format`      | `compact` or `json`                             |
+|                 | `file_path`   | `stdout` or a file path                         |
+| **listeners**   | `name`        | Name of the listener                            |
+|                 | `addr`        | Address and port to bind (e.g., `0.0.0.0:3000`) |
+|                 | `protocol`    | `http` or `https`                               |
+| **tls**         | `cert_file`   | Path to certificate .pem file                   |
+|                 | `key_file`    | Path to private key .pem file                   |
+|                 | `default`     | Whether this is the default certificate         |
+|                 | `hostnames`   | List of hostnames for SNI routing               |
+| **http**        | `http`        | Container for HTTP-related configuration        |
+| **middlewares** | `middlewares` | HTTP middleware configurations                  |
+| **services**    | `upstreams`   | List of backend servers                         |
+|                 | `target`      | URL of the backend server                       |
+|                 | `weight`      | Weight for the WRR load balancer                |
+| **routes**      | `hosts`       | List of hostnames to match                      |
+|                 | `path`        | URL path to match                               |
+|                 | `listeners`   | List of listeners this route applies to         |
+|                 | `service`     | Name of the service to route to                 |
+|                 | `middlewares` | List of middleware to apply                     |
 
 ## Roadmap
 
@@ -163,7 +178,7 @@ This project is still in its early stages, but the following features are planne
 - **Comprehensive Unit Tests:** Develop a full suite of unit tests for individual components like routing, load
   balancing and middlewares.
 - **Upstream Health Checks:** To ensure traffic is only sent to healthy backend services.
-- **Metrics Exposition:** To integrate with monitoring solutions like Prometheus.
+- **Expose Metrics:** To integrate with monitoring solutions like Prometheus.
 
 Feedback and contributions to these or any other features are highly welcome.
 
