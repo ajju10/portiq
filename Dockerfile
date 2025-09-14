@@ -37,4 +37,4 @@ COPY --from=builder /app/target/release/portiq .
 
 ENTRYPOINT ["./portiq"]
 
-CMD ["/etc/portiq/portiq.yml"]
+CMD ["--config", "/etc/portiq/portiq.yml"]
