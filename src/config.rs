@@ -20,7 +20,10 @@ pub struct GatewayConfig {
     pub access_log: AccessLog,
     pub tls: Option<Vec<TLSConfig>>,
     pub listeners: Vec<Listener>,
+    #[serde(default)]
     pub http: HttpConfig,
+    #[serde(default)]
+    pub tcp: TcpConfig,
 }
 
 impl GatewayConfig {
@@ -124,7 +127,7 @@ pub struct Listener {
     pub protocol: Protocol,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HttpConfig {
     #[serde(default)]
     pub middlewares: HashMap<String, MiddlewareConfig>,
@@ -135,6 +138,30 @@ pub struct HttpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpServiceConfig {
     pub upstreams: Vec<Upstream>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TcpConfig {
+    pub services: HashMap<String, TcpServiceConfig>,
+    pub routes: Vec<TcpRouteConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpServiceConfig {
+    pub upstreams: Vec<Upstream>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpRouteConfig {
+    pub listeners: Vec<String>,
+    pub service: String,
+    pub tls_mode: Option<TcpTlsMode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TcpTlsMode {
+    Terminate,
+    Passthrough,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +187,7 @@ pub enum Protocol {
     #[default]
     Http,
     Https,
+    Tcp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
