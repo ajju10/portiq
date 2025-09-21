@@ -18,18 +18,33 @@ impl Service {
 
 pub struct ServiceRegistry {
     http: HashMap<String, Service>,
+    tcp: HashMap<String, Service>,
 }
 
 impl ServiceRegistry {
     pub fn init(gateway_config: Arc<GatewayConfig>) -> Self {
-        let mut http_map = HashMap::with_capacity(gateway_config.http.services.len());
-        for (name, svc_config) in &gateway_config.http.services {
-            http_map.insert(name.clone(), Service::new(&svc_config.upstreams));
-        }
-        ServiceRegistry { http: http_map }
+        let http = gateway_config
+            .http
+            .services
+            .iter()
+            .map(|(name, service_config)| (name.clone(), Service::new(&service_config.upstreams)))
+            .collect();
+
+        let tcp = gateway_config
+            .tcp
+            .services
+            .iter()
+            .map(|(name, service_config)| (name.clone(), Service::new(&service_config.upstreams)))
+            .collect();
+
+        ServiceRegistry { http, tcp }
     }
 
-    pub fn get_service_endpoint(&self, name: &str) -> Option<&Upstream> {
+    pub fn get_http_service_endpoint(&self, name: &str) -> Option<&Upstream> {
         self.http.get(name).and_then(|svc| svc.lb.get_next())
+    }
+
+    pub fn get_tcp_service_endpoint(&self, name: &str) -> Option<&Upstream> {
+        self.tcp.get(name).and_then(|svc| svc.lb.get_next())
     }
 }

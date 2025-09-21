@@ -1,11 +1,11 @@
 use crate::SharedGatewayState;
-use crate::config::{GatewayConfig, Upstream};
+use crate::config::{GatewayConfig, TcpTlsMode, Upstream};
 use crate::error::RouterError;
 use crate::service::ServiceRegistry;
 use std::net::IpAddr;
 use std::sync::Arc;
 
-pub struct Route {
+pub struct HttpRoute {
     hosts: Option<Box<[String]>>,
     path: Option<String>,
     listeners: Box<[String]>,
@@ -13,7 +13,7 @@ pub struct Route {
     middlewares: Box<[String]>,
 }
 
-impl Route {
+impl HttpRoute {
     pub fn get_service(&self) -> String {
         self.service.clone()
     }
@@ -23,16 +23,35 @@ impl Route {
     }
 }
 
+pub struct TcpRoute {
+    listeners: Box<[String]>,
+    service: String,
+    tls_mode: Option<TcpTlsMode>,
+}
+
+impl TcpRoute {
+    pub fn get_service(&self) -> &str {
+        &self.service
+    }
+
+    pub fn get_tls_mode(&self) -> Option<&TcpTlsMode> {
+        self.tls_mode.as_ref()
+    }
+}
+
 pub struct Router {
-    http: Box<[Route]>,
-    svc_registry: Arc<ServiceRegistry>,
+    http: Box<[HttpRoute]>,
+    tcp: Box<[TcpRoute]>,
+    service_registry: Arc<ServiceRegistry>,
 }
 
 impl Router {
     pub fn new(gateway_config: Arc<GatewayConfig>, svc_registry: Arc<ServiceRegistry>) -> Self {
-        let mut http_routes = Vec::with_capacity(gateway_config.http.routes.len());
-        for route in &gateway_config.http.routes {
-            let route_v1 = Route {
+        let http = gateway_config
+            .http
+            .routes
+            .iter()
+            .map(|route| HttpRoute {
                 hosts: route.hosts.clone().map(|hosts| hosts.into_boxed_slice()),
                 path: route.path.clone(),
                 listeners: route.listeners.clone().into_boxed_slice(),
@@ -43,16 +62,33 @@ impl Router {
                     .cloned()
                     .unwrap_or_else(Vec::new)
                     .into_boxed_slice(),
-            };
-            http_routes.push(route_v1);
-        }
+            })
+            .collect();
+
+        let tcp = gateway_config
+            .tcp
+            .routes
+            .iter()
+            .map(|route| TcpRoute {
+                listeners: route.listeners.clone().into_boxed_slice(),
+                service: route.service.clone(),
+                tls_mode: route.tls_mode.clone(),
+            })
+            .collect();
+
         Router {
-            http: http_routes.into_boxed_slice(),
-            svc_registry,
+            http,
+            tcp,
+            service_registry: svc_registry,
         }
     }
 
-    pub fn get_route(&self, host: &str, path: &str, listener: &str) -> Result<&Route, RouterError> {
+    pub fn get_http_route(
+        &self,
+        host: &str,
+        path: &str,
+        listener: &str,
+    ) -> Result<&HttpRoute, RouterError> {
         let route = &self
             .http
             .iter()
@@ -87,9 +123,23 @@ impl Router {
         route.ok_or(RouterError::NotFound)
     }
 
-    pub fn get_service(&self, name: &str) -> Result<&Upstream, RouterError> {
-        self.svc_registry
-            .get_service_endpoint(name)
+    pub fn get_tcp_route(&self, listener: &str) -> Result<&TcpRoute, RouterError> {
+        let route = self
+            .tcp
+            .iter()
+            .find(|&route| route.listeners.iter().any(|rl| rl == listener));
+        route.ok_or(RouterError::NotFound)
+    }
+
+    pub fn get_http_upstream(&self, name: &str) -> Result<&Upstream, RouterError> {
+        self.service_registry
+            .get_http_service_endpoint(name)
+            .ok_or(RouterError::NoUpstream)
+    }
+
+    pub fn get_tcp_upstream(&self, name: &str) -> Result<&Upstream, RouterError> {
+        self.service_registry
+            .get_tcp_service_endpoint(name)
             .ok_or(RouterError::NoUpstream)
     }
 
@@ -206,7 +256,7 @@ mod tests {
     #[test]
     fn test_route_matches_with_host_and_path() {
         let router = build_router();
-        let route_result = router.get_route("api.example.com", "/v1/api", "http-main");
+        let route_result = router.get_http_route("api.example.com", "/v1/api", "http-main");
         assert!(
             matches!(route_result, Ok(_)),
             "This route should match to user-service"
@@ -218,7 +268,7 @@ mod tests {
     #[test]
     fn test_wildcard_host_matches_user_service() {
         let router = build_router();
-        let route_result = router.get_route("some.api.example.com", "/v1", "http-main");
+        let route_result = router.get_http_route("some.api.example.com", "/v1", "http-main");
         assert!(
             matches!(route_result, Ok(_)),
             "This route should match to user-service"

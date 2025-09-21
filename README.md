@@ -8,7 +8,7 @@
 
 ## Features
 
-- **Multiple Listeners**: Support for multiple HTTP/HTTPS listeners.
+- **Multiple Listeners**: Support for multiple HTTP/HTTPS/TCP listeners.
 - **Virtual Hosts**: Route requests based on hostnames with SNI support.
 - **Path-based Routing**: Route requests to different upstream services based on the URL path.
 - **TLS Termination**: Offload TLS encryption/decryption from your backend services.
@@ -22,9 +22,9 @@
 - **Yaml Configuration**: Configure everything through a single `portiq.yml` file.
 - **Config Validation**: Basic validation for configuration, such as ensuring one default TLS certificate, no duplicate
   listeners, no undefined services, etc.
-- **Dynamic Config Reload**: Dynamic reload via REST API /api/v1/reload. Currently only the section under http can be
-  reloaded (middlewares, services, routes). Once the file is updated hit /api/v1/reload endpoint to signal reload. Maybe
-  a file watcher can also be added later.
+- **Dynamic Config Reload**: Dynamic reload via REST API /api/v1/reload. Currently only the section under http and tcp
+  can be reloaded (middlewares, services, routes). Once the file is updated hit /api/v1/reload endpoint to signal
+  reload. Maybe a file watcher can also be added later.
 - **Logging**: Structured and configurable logging for better monitoring.
 - **API Server**: A minimal REST API to allow dynamic updates to configuration. Currently, it's very minimal just the
   below endpoints:
@@ -89,6 +89,10 @@ listeners: # One or more listeners
     addr: 0.0.0.0:3443
     protocol: https
 
+  - name: tcp-main
+    addr: 0.0.0.0:5000
+    protocol: tcp # for raw TCP listeners
+
 http:
   middlewares: # List of named middlewares can be omitted if not required
     global-rate-limit:
@@ -112,11 +116,22 @@ http:
       path: /api/v1/*
       listeners: [ https-main ]
       service: user-service
-      middlewares: [ global-rate-limit ]
+      middlewares: [ global-rate-limit ] # middlewares can be attached to http routes
 
     - path: /api/internal
       listeners: [ http-main ]
       service: internal-service
+
+tcp:
+  services:
+    postgres:
+      upstreams:
+        - target: host.postgres.com # can be multiple for load balancing
+
+  routes:
+    - listeners: [ tcp-main ]
+      service: postgres
+      tls_mode: passthrough # Default `None`, can be left blank or one of `terminate`/`passthrough`
 ```
 
 ### 3. Run PortIQ

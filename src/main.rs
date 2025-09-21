@@ -1,10 +1,10 @@
 #![deny(warnings)]
 
 use crate::config::load_config;
+use crate::gateway_runtime::GatewayRuntime;
 use crate::middleware::registry::MiddlewareRegistry;
 use crate::utils::{graceful_shutdown, shutdown_signal};
 use arc_swap::ArcSwap;
-use gateway_runtime::GatewayRuntime;
 use std::env;
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
