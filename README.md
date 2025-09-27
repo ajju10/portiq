@@ -184,19 +184,6 @@ This request will be distributed between `https://user.service1:4443` and `https
 |                 | `service`     | Name of the service to route to                 |
 |                 | `middlewares` | List of middleware to apply                     |
 
-## Roadmap
-
-This project is still in its early stages, but the following features are planned for future development:
-
-- **Robust Error Handling:** Implement comprehensive error handling for network issues, upstream failures, and invalid
-  client requests. Add validation for configuration.
-- **Comprehensive Unit Tests:** Develop a full suite of unit tests for individual components like routing, load
-  balancing and middlewares.
-- **Upstream Health Checks:** To ensure traffic is only sent to healthy backend services.
-- **Expose Metrics:** To integrate with monitoring solutions like Prometheus.
-
-Feedback and contributions to these or any other features are highly welcome.
-
 ## Contributing
 
 This project is a work in progress and was built primarily for learning purposes. I welcome any and all feedback,
