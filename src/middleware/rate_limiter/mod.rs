@@ -1,5 +1,6 @@
 use crate::config::MiddlewareConfig;
 use crate::middleware::Middleware;
+use crate::middleware::rate_limiter::token_bucket::{TokenBucket, TokenBucketRateLimiter};
 use crate::middleware::registry::MiddlewareFactory;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -14,7 +15,7 @@ pub trait RateLimiter {
 }
 
 pub struct RateLimiterFactory {
-    store: Arc<Mutex<HashMap<String, token_bucket::TokenBucket>>>,
+    store: Arc<Mutex<HashMap<String, TokenBucket>>>,
 }
 
 impl RateLimiterFactory {
@@ -28,14 +29,12 @@ impl RateLimiterFactory {
 impl MiddlewareFactory for RateLimiterFactory {
     fn create(&self, config: Option<MiddlewareConfig>) -> Arc<dyn Middleware> {
         match config {
-            Some(MiddlewareConfig::RateLimit(cfg)) => {
-                Arc::new(token_bucket::TokenBucketRateLimiter::new(
-                    cfg.source,
-                    cfg.limit,
-                    cfg.period,
-                    Arc::clone(&self.store),
-                ))
-            }
+            Some(MiddlewareConfig::RateLimit(cfg)) => Arc::new(TokenBucketRateLimiter::new(
+                cfg.source,
+                cfg.limit,
+                cfg.period,
+                Arc::clone(&self.store),
+            )),
             _ => panic!("Invalid config for rate limiter"),
         }
     }

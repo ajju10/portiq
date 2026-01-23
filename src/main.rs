@@ -42,7 +42,7 @@ static CONFIG_FILE_PATH: OnceLock<String> = OnceLock::new();
 
 #[tokio::main]
 async fn main() {
-    let args = env::args().collect::<Vec<_>>();
+    let args = env::args().collect::<Box<[_]>>();
     assert!(
         args.len() > 2,
         "Config file is required\nUsage: cargo run --config <config-file-path>"

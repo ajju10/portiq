@@ -160,7 +160,6 @@ impl Middleware for TokenBucketRateLimiter {
 mod tests {
     use super::*;
     use std::thread::sleep;
-    // use std::thread::sleep;
     use std::time::Duration;
 
     #[test]
