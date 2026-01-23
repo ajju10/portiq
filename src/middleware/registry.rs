@@ -27,7 +27,7 @@ impl MiddlewareRegistry {
         MiddlewareRegistry { factories }
     }
 
-    pub fn create_chain(&self, middlewares: &[&MiddlewareConfig]) -> Vec<Arc<dyn Middleware>> {
+    pub fn create_chain(&self, middlewares: &[&MiddlewareConfig]) -> Box<[Arc<dyn Middleware>]> {
         let mut route_middlewares = vec![];
 
         if let Some(request_id_middleware) = self
@@ -58,9 +58,9 @@ impl MiddlewareRegistry {
                     .get(RATE_LIMIT_MIDDLEWARE)
                     .map(|factory| factory.create(Some(MiddlewareConfig::RateLimit(cfg.clone())))),
             })
-            .collect::<Vec<_>>();
+            .collect::<Box<[_]>>();
 
         route_middlewares.extend(chain);
-        route_middlewares
+        route_middlewares.into_boxed_slice()
     }
 }
