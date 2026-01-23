@@ -36,6 +36,12 @@ mod gateway_runtime;
 
 pub type SharedGatewayState = Arc<ArcSwap<GatewayRuntime>>;
 
+const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
+
+const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const PACKAGE_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
+
 static MIDDLEWARE_REGISTRY: LazyLock<MiddlewareRegistry> = LazyLock::new(MiddlewareRegistry::init);
 
 static CONFIG_FILE_PATH: OnceLock<String> = OnceLock::new();
@@ -51,6 +57,9 @@ async fn main() {
     if args[1] != "--config" {
         panic!("expected --config found {:?}", args[1]);
     }
+
+    tracing::info!("Starting {PACKAGE_NAME}-v{PACKAGE_VERSION}");
+    tracing::info!("Description: {PACKAGE_DESCRIPTION}");
 
     let _ = CONFIG_FILE_PATH.set(args[2].clone());
 
