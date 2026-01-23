@@ -1,6 +1,7 @@
 [package]
 name = "portiq"
-version = "0.1.0"
+version = "0.2.0"
+description = "PortIQ is an HTTP(S) API gateway written in Rust, built using hyper, reqwest, rustls, and tokio"
 edition = "2024"
 license = "MIT"
 
@@ -30,4 +31,3 @@ arc-swap = "1.7.1"
 [profile.release]
 codegen-units = 1
 lto = true
-
