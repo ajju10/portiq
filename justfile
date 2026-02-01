@@ -18,7 +18,7 @@ lint:
 build profile="":
     cargo build {{profile}}
 
-test filter="": build
+test filter="":
     cargo test {{filter}}
 
 run *args:
@@ -26,6 +26,9 @@ run *args:
 
 clean:
     cargo clean
+
+doc:
+    cargo doc
 
 docker-build tag="latest":
     docker build -t {{DOCKER_IMAGE_NAME}}:{{tag}} .
