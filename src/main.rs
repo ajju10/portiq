@@ -1,4 +1,5 @@
 #![deny(warnings)]
+#![forbid(unsafe_code)]
 
 use crate::config::load_config;
 use crate::gateway_runtime::GatewayRuntime;
