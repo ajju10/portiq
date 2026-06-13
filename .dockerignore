@@ -5,6 +5,7 @@ rust-analyzer-target
 .idea
 .github
 .git
+.jj
 
 README.md
 LICENSE
@@ -14,3 +15,4 @@ LICENSE
 *.svg
 *.yml
 *.pem
+
