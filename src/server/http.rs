@@ -96,14 +96,14 @@ async fn handle_client(
     match router.get_http_route(original_host, original_path, &context.listener) {
         Ok(route) => {
             let service_name = route.get_service();
-            if let Ok(upstream) = router.get_http_upstream(&service_name) {
-                let named_middlewares = route.get_middlewares();
-                let mut route_middlewares = Vec::new();
+            if let Ok(upstream) = router.get_http_upstream(service_name) {
                 let middleware_configs = &current_config.http.middlewares;
-                for name in named_middlewares {
-                    let cfg = middleware_configs.get(name).unwrap();
-                    route_middlewares.push(cfg);
-                }
+                let route_middlewares = route
+                    .get_middlewares()
+                    .iter()
+                    .filter_map(|name| middleware_configs.get(name.as_ref()))
+                    .collect::<Vec<_>>();
+
                 let middlewares = MIDDLEWARE_REGISTRY.create_chain(&route_middlewares);
 
                 let handler = send_upstream(

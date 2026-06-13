@@ -2,7 +2,8 @@ FROM rust:1.93 AS chef
 
 RUN cargo install cargo-chef 
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
     pkg-config \
     build-essential \

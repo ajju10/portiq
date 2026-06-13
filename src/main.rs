@@ -37,6 +37,10 @@ mod gateway_runtime;
 
 pub type SharedGatewayState = Arc<ArcSwap<GatewayRuntime>>;
 
+pub type BoxedSlice<T> = Box<[T]>;
+
+pub type BoxedStr = Box<str>;
+
 const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
 
 const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

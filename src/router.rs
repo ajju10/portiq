@@ -1,31 +1,31 @@
-use crate::SharedGatewayState;
 use crate::config::{GatewayConfig, TcpTlsMode, Upstream};
 use crate::error::RouterError;
 use crate::service::ServiceRegistry;
+use crate::{BoxedSlice, BoxedStr, SharedGatewayState};
 use std::net::IpAddr;
 use std::sync::Arc;
 
 pub struct HttpRoute {
-    hosts: Option<Box<[String]>>,
-    path: Option<String>,
-    listeners: Box<[String]>,
-    service: String,
-    middlewares: Box<[String]>,
+    hosts: Option<BoxedSlice<BoxedStr>>,
+    path: Option<BoxedStr>,
+    listeners: BoxedSlice<BoxedStr>,
+    service: BoxedStr,
+    middlewares: BoxedSlice<BoxedStr>,
 }
 
 impl HttpRoute {
-    pub fn get_service(&self) -> String {
-        self.service.clone()
+    pub fn get_service(&self) -> &str {
+        &self.service
     }
 
-    pub fn get_middlewares(&self) -> &[String] {
-        &self.middlewares
+    pub fn get_middlewares(&self) -> &[BoxedStr] {
+        self.middlewares.as_ref()
     }
 }
 
 pub struct TcpRoute {
-    listeners: Box<[String]>,
-    service: String,
+    listeners: BoxedSlice<BoxedStr>,
+    service: BoxedStr,
     tls_mode: Option<TcpTlsMode>,
 }
 
@@ -40,8 +40,8 @@ impl TcpRoute {
 }
 
 pub struct Router {
-    http: Box<[HttpRoute]>,
-    tcp: Box<[TcpRoute]>,
+    http: BoxedSlice<HttpRoute>,
+    tcp: BoxedSlice<TcpRoute>,
     service_registry: Arc<ServiceRegistry>,
 }
 
@@ -52,16 +52,25 @@ impl Router {
             .routes
             .iter()
             .map(|route| HttpRoute {
-                hosts: route.hosts.clone().map(|hosts| hosts.into_boxed_slice()),
-                path: route.path.clone(),
-                listeners: route.listeners.clone().into_boxed_slice(),
-                service: route.service.clone(),
+                hosts: route.hosts.clone().map(|hosts| {
+                    hosts
+                        .into_iter()
+                        .map(|host| host.into_boxed_str())
+                        .collect()
+                }),
+                path: route.path.clone().map(|path| path.into_boxed_str()),
+                listeners: route
+                    .listeners
+                    .clone()
+                    .into_iter()
+                    .map(|listener| listener.into_boxed_str())
+                    .collect(),
+                service: route.service.clone().into_boxed_str(),
                 middlewares: route
                     .middlewares
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_else(Vec::new)
-                    .into_boxed_slice(),
+                    .clone()
+                    .map(|mws| mws.into_iter().map(|m| m.into_boxed_str()).collect())
+                    .unwrap_or(Box::new([])),
             })
             .collect();
 
@@ -70,8 +79,13 @@ impl Router {
             .routes
             .iter()
             .map(|route| TcpRoute {
-                listeners: route.listeners.clone().into_boxed_slice(),
-                service: route.service.clone(),
+                listeners: route
+                    .listeners
+                    .clone()
+                    .into_iter()
+                    .map(|listener| listener.into_boxed_str())
+                    .collect(),
+                service: route.service.clone().into_boxed_str(),
                 tls_mode: route.tls_mode.clone(),
             })
             .collect();
@@ -127,7 +141,7 @@ impl Router {
         let route = self
             .tcp
             .iter()
-            .find(|&route| route.listeners.iter().any(|rl| rl == listener));
+            .find(|&route| route.listeners.iter().any(|rl| rl.as_ref() == listener));
         route.ok_or(RouterError::NotFound)
     }
 
@@ -143,8 +157,9 @@ impl Router {
             .ok_or(RouterError::NoUpstream)
     }
 
-    fn match_host(&self, host: &str, router_hosts: &[String]) -> bool {
+    fn match_host(&self, host: &str, router_hosts: &[impl AsRef<str>]) -> bool {
         for rh in router_hosts {
+            let rh = rh.as_ref();
             if let Some(suffix) = rh.strip_prefix("*.") {
                 if host.ends_with(suffix) && host != suffix {
                     return true;
@@ -170,8 +185,8 @@ impl Router {
         }
     }
 
-    fn match_listener(&self, listener: &str, router_listeners: &[String]) -> bool {
-        router_listeners.iter().any(|rl| rl == listener)
+    fn match_listener(&self, listener: &str, router_listeners: &[impl AsRef<str>]) -> bool {
+        router_listeners.iter().any(|rl| rl.as_ref() == listener)
     }
 }
 
