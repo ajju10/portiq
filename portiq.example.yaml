@@ -1,0 +1,105 @@
+#version: 1
+
+#admin_api:
+#  addr: 0.0.0.0:5678
+
+#log:
+#  level: INFO
+#  format: compact
+#  file_path: stdout
+#
+access_log:
+  enabled: false
+#  format: compact
+#  file_path: stdout
+
+#tls:
+#  - cert_file: cert.pem
+#    key_file: key.pem
+#    default: true
+#    hostnames: [ api.example.com ]
+
+listeners:
+  - name: http-main
+    addr: 0.0.0.0:6000
+    protocol: http
+
+#  - name: postgres
+#    addr: 0.0.0.0:5000
+#    protocol: tcp
+
+#  - name: dns
+#    addr: 0.0.0.0:5001
+#    protocol: udp
+
+#  - name: https-main
+#    addr: 0.0.0.0:3443
+#    protocol: https
+#
+#  - name: https-api
+#    addr: 0.0.0.0:8443
+#    protocol: https
+#
+#  - name: internal-http
+#    addr: 127.0.0.1:8080
+#    protocol: http
+
+http:
+  #  middlewares:
+  #    global-rate-limit:
+  #      rate_limit:
+  #        limit: 2
+  #        period: "10s"
+
+  services:
+    echo-service:
+      upstreams:
+        - target: http://localhost:4000
+
+    #    user-service:
+    #      upstreams:
+    #        - target: http://user.service1:3000
+    #          weight: 2
+    #        - target: http://user.service2:4000
+    #          weight: 1
+
+    # auth-service:
+    #   upstreams:
+    #     - target: https://auth.service:3000
+
+    # metrics-service:
+    #   upstreams:
+    #     - target: http://metrics.service:5000
+
+  routes:
+    #    - hosts: [ api.example.com ] #, "*.api.example.com" ]
+    #      path: /v1/*
+    #      listeners: [ https-main, https-api ]
+    #      service: user-service
+    #      middlewares: [ global-rate-limit ]
+
+    #    - path: /new
+    #      listeners: [ https-main ]
+    #      service: auth-service
+    #      middlewares: [ global-rate-limit ]
+
+    # - hosts: [ internal.company.com ]
+    #   path: /metrics
+    #   listeners: [ internal-http ]
+    #   service: metrics-service
+
+    - path: /hello
+      listeners: [http-main]
+      service: echo-service
+#      middlewares: [ global-rate-limit ]
+
+#tcp:
+#  services:
+#    postgres:
+#      upstreams:
+#        - target: localhost:5000
+#
+#  routes:
+#    - listeners: [ postgres ]
+#      service: postgres
+#      tls_mode: passthrough
