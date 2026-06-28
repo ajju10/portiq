@@ -14,7 +14,6 @@ tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "signal"]
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["json", "env-filter"] }
 uuid = { version = "1.20.0", features = ["v4"] }
-rustls-pemfile = "2.2.0"
 rustls-pki-types = "1.14.0"
 rustls = "0.23.36"
 tokio-rustls = "0.26.4"

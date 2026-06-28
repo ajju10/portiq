@@ -4,6 +4,7 @@ use hyper::body::Bytes;
 use hyper::http::HeaderMap;
 use hyper::{Response, StatusCode};
 use reqwest::RequestBuilder;
+use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::net::IpAddr;
 use std::time::Duration;
@@ -15,16 +16,17 @@ use tokio_util::sync::CancellationToken;
 pub fn load_certs(filename: &str) -> io::Result<Vec<CertificateDer<'static>>> {
     let certfile = fs::File::open(filename)
         .map_err(|e| io::Error::other(format!("Failed to open {filename}: {e}")))?;
-    let mut reader = io::BufReader::new(certfile);
-    rustls_pemfile::certs(&mut reader).collect()
+    let reader = io::BufReader::new(certfile);
+    Ok(CertificateDer::pem_reader_iter(reader).flatten().collect())
 }
 
 // Load private key from file.
 pub fn load_private_key(filename: &str) -> io::Result<PrivateKeyDer<'static>> {
     let keyfile = fs::File::open(filename)
         .map_err(|e| io::Error::other(format!("Failed to open {filename}: {e}")))?;
-    let mut reader = io::BufReader::new(keyfile);
-    rustls_pemfile::private_key(&mut reader).map(|key| key.unwrap())
+    let reader = io::BufReader::new(keyfile);
+    PrivateKeyDer::from_pem_reader(reader)
+        .map_err(|e| io::Error::other(format!("Failed to read private key: {e}")))
 }
 
 pub fn response_with_status(status_code: StatusCode) -> Response<BoxBody<Bytes, hyper::Error>> {
