@@ -1,10 +1,10 @@
 /target
-/rust-analyzer-target
 
 .vscode
 .idea
 
-*.yml
 *.log
 *.pem
 *.svg
+
+/manifests

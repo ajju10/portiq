@@ -1,41 +1,38 @@
-FROM rust:1.96 AS chef
-
-RUN cargo install cargo-chef 
-
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    cmake \
-    pkg-config \
-    build-essential \
-    clang \
-    && rm -rf /var/lib/apt/lists/*
+FROM rust:1.96 AS builder
 
 WORKDIR /app
 
-FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
 
-COPY . .
+RUN mkdir -p src && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
 
-RUN cargo chef prepare  --recipe-path recipe.json
+COPY src src
 
-FROM chef AS builder
-
-COPY --from=planner /app/recipe.json recipe.json
-
-RUN cargo chef cook --release --recipe-path recipe.json
-
-COPY . .
+RUN touch src/main.rs
 
 RUN cargo build --release
 
-FROM debian:trixie-slim AS runtime
+FROM debian:trixie-slim
 
-RUN mkdir -p /etc/portiq
+ARG UID=1000
+ARG GID=1000
+ARG UNAME=nonroot
+ARG GNAME=nonroot
 
-WORKDIR /app
+RUN groupadd -g ${GID} ${GNAME} && \
+    useradd -m -u ${UID} -g ${GNAME} ${UNAME}
 
-COPY --from=builder /app/target/release/portiq .
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT ["./portiq"]
+COPY --chown=${UNAME}:${GNAME} --from=builder /app/target/release/portiq /usr/bin/portiq
 
-CMD ["--config", "/etc/portiq/portiq.yml"]
+COPY portiq.example.yaml /etc/portiq/portiq.yaml
+
+USER ${UNAME}
+
+ENTRYPOINT ["portiq", "--config", "/etc/portiq/portiq.yaml"]

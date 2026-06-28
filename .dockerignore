@@ -1,11 +1,17 @@
 target
-rust-analyzer-target
+
+manifests
 
 .vscode
 .idea
+
 .github
 .git
 .jj
+
+Dockerfile
+
+justfile
 
 README.md
 LICENSE
@@ -13,6 +19,4 @@ LICENSE
 
 *.log
 *.svg
-*.yml
 *.pem
-
